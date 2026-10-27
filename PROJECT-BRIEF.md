@@ -41,5 +41,8 @@ One app holding all our recipes. Pick meals for the week (or a day), get one com
 - Centre Add action in the bottom bar: kept (Aaron, 26 Oct 2026). Opens Add recipe, Add list item, and later Photo to recipe. This is the product decision BRANDING.md refers to.
 - Phones: Samsung Galaxy S23 Ultra (Aaron), S25+ (Janice)
 
+## Build status
+- M0 skeleton released 27 Oct 2026: v0.1.0 on github.com/aaronalm-ops/Mise/releases (built on GitHub Actions; not yet checked on a phone)
+
 ## Open questions
 - Where the Folio recipes sit (one folder or scattered) and roughly how many

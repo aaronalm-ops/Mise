@@ -26,8 +26,8 @@ Why this order: the maths (scaling, swaps, merging units) is the heart of the ap
 4. Janice (needed from M3). She only needs her email address ready; Claude will add an invite step in the app.
 
 ## Part B: Claude, automatic (per milestone)
-5. Write the code in Projects\Mise\app following SPEC-PHASE1.md and BRANDING.md.
-6. Create a signing key in Projects\Mise\keys (keep that folder private) and add it to GitHub as four secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS (mise), KEY_PASSWORD.
+5. Write the code in Projects\Mise (the GitHub repository) following SPEC-PHASE1.md and BRANDING.md.
+6. Signing key lives in Projects\Mise-keys, outside the repository (done 27 Oct 2026; keep that folder private and backed up) and add it to GitHub as four secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS (mise), KEY_PASSWORD.
 7. Push, watch the GitHub Actions build, fix and push again until it is green.
 8. Tag the release (v0.1.0 for M0, v0.2.0 for M1 and so on). GitHub publishes the APK.
 9. From M3: create the database tables and security rules in Supabase (household-only access), and turn on live updates for the grocery list.
