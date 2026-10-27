@@ -77,6 +77,11 @@ android {
     }
 }
 
+// Room writes each database version's schema here, so migrations can be checked.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // room-ktx was merged into room-runtime in 2.7.0 (withTransaction, Flow queries live there now).
