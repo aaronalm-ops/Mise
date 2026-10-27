@@ -1,6 +1,7 @@
 package app.mise.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,17 +23,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
  * The centre Add action (kept by Aaron, 26 Oct 2026). Panels v2 frame: task heading, reachable
- * Close, then the choices. In M0 the choices are shown but not live yet: New recipe arrives in
- * M1, List item in M2, Recipe from photo in Phase 2.
+ * Close, then the choices. New recipe is live (M1); List item arrives in M2, Recipe from photo
+ * in Phase 2.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddSheet(onDismiss: () -> Unit) {
+fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit) {
     val c = Mise.colours
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -48,7 +50,7 @@ fun AddSheet(onDismiss: () -> Unit) {
                 IconTile(MiseIcons.Close, "Close", onDismiss)
             }
             Spacer(Modifier.height(12.dp))
-            AddChoice(MiseIcons.Library, "New recipe", "Next update")
+            AddChoice(MiseIcons.Library, "New recipe", "Write it with servings and swaps", onClick = onNewRecipe)
             AddChoice(MiseIcons.List, "Item on the grocery list", "Coming with the list")
             AddChoice(MiseIcons.Camera, "Recipe from a photo", "Phase 2")
         }
@@ -56,19 +58,23 @@ fun AddSheet(onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun AddChoice(icon: ImageVector, title: String, note: String) {
+private fun AddChoice(icon: ImageVector, title: String, note: String, onClick: (() -> Unit)? = null) {
     val c = Mise.colours
     val shape = RoundedCornerShape(10.dp)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp).semantics(mergeDescendants = true) {},
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(44.dp).background(c.soft, shape), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = null, tint = c.text2, modifier = Modifier.size(22.dp))
+            Icon(icon, contentDescription = null, tint = if (onClick != null) c.text else c.text2, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = Mise.type.bodyM, color = c.text2)
+            Text(title, style = Mise.type.bodyM, color = if (onClick != null) c.text else c.text2)
             Text(note.uppercase(), style = Mise.type.labelS, color = c.text2, modifier = Modifier.padding(top = 4.dp))
         }
     }

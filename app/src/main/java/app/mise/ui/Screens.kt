@@ -94,34 +94,6 @@ fun PlanScreen(onSettings: () -> Unit) {
 }
 
 @Composable
-fun RecipesScreen(onSettings: () -> Unit) {
-    val c = Mise.colours
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader("Your library", "Recipes", MiseIcons.Settings, "Settings", onSettings)
-        ScreenBody {
-            val shape = RoundedCornerShape(14.dp)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .background(c.surface, shape)
-                    .border(BorderStroke(1.dp, c.line), shape)
-                    .padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(MiseIcons.Search, contentDescription = null, tint = c.text2, modifier = Modifier.size(20.dp))
-                Text("Search recipes", style = Mise.type.body, color = c.text2, modifier = Modifier.padding(start = 10.dp))
-            }
-            SectionLabel("All recipes", "0")
-            EmptyState(
-                title = "No recipes yet",
-                body = "Next update: tap Add to write your first recipe, with servings and swaps.",
-            )
-        }
-    }
-}
-
-@Composable
 fun ListScreen(onSettings: () -> Unit) {
     val c = Mise.colours
     Column(Modifier.fillMaxSize()) {

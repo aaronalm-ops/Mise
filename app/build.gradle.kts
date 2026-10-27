@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 // CI injects these through the environment. Each has a safe default so a build without
@@ -77,6 +78,12 @@ android {
 }
 
 dependencies {
+    implementation(libs.kotlinx.coroutines.android)
+    // room-ktx was merged into room-runtime in 2.7.0 (withTransaction, Flow queries live there now).
+    implementation(libs.room.runtime)
+    ksp(libs.room.compiler)
+    testImplementation(libs.junit)
+
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
