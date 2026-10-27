@@ -71,7 +71,19 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew testReleaseUnitTest assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew testReleaseUnitTest assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+
+      # The full log is not reachable from Claude's tools, so on failure the key lines are
+      # published as one error annotation (readable through the checks API).
+      - name: Summarise failure
+        if: failure()
+        shell: bash
+        run: |
+          { grep -E "^e: |^w: .*error|error:|FAILED|What went wrong|> Task .* FAILED|Exception|expected:<" -A2 build.log || true; echo "-----"; tail -60 build.log; } \
+            | head -250 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}' > summary.txt
+          echo "::error title=Build failure::$(cat summary.txt)"
 
       - name: Rename APK
         shell: bash
