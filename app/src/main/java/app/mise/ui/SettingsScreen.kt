@@ -51,6 +51,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             Card { InfoRow("Theme", "Follows your phone") }
             SectionLabel("About")
             Card {
+                Box(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp), contentAlignment = Alignment.Center) { MiseStamp(112.dp) }
                 InfoRow("App", "Mise")
                 Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(c.line))
                 InfoRow("Version", BuildConfig.VERSION_NAME)

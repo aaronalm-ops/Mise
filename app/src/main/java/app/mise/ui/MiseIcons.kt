@@ -52,6 +52,9 @@ object MiseIcons {
     }
     val Back: ImageVector by lazy { icon("back", listOf("M15 5l-7 7 7 7")) }
     val Edit: ImageVector by lazy { icon("edit", listOf("M5 19h4L19 9l-4-4L5 15v4Z", "M13.5 6.5l4 4")) }
+    val Forward: ImageVector by lazy { icon("forward", listOf("M9 5l7 7-7 7")) }
+    val Check: ImageVector by lazy { icon("check", listOf("M5 12.5l4.5 4.5L19 7.5")) }
+    val Arrow: ImageVector by lazy { icon("arrow", listOf("M5 12h14M13 6l6 6-6 6")) }
     val Close: ImageVector by lazy { icon("close", listOf("M6 6l12 12M18 6L6 18")) }
     val Camera: ImageVector by lazy {
         icon("camera", listOf("M5 8h3l1.5-2h5L16 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z", "M9 13a3 3 0 1 0 6 0a3 3 0 1 0-6 0Z"))

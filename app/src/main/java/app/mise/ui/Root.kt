@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import app.mise.data.Grocery
+import java.time.LocalDate
 
 /**
  * Screens above the tabs, kept as a small stack of route strings so it survives rotation and
@@ -23,6 +25,11 @@ fun MiseRoot() {
     var dest by rememberSaveable { mutableStateOf(Dest.Plan) }
     var stackText by rememberSaveable { mutableStateOf("") }
     var showAdd by rememberSaveable { mutableStateOf(false) }
+    var showAddItem by rememberSaveable { mutableStateOf(false) }
+    var splash by rememberSaveable { mutableStateOf(true) }
+    var weekText by rememberSaveable { mutableStateOf(Grocery.weekStartOf(LocalDate.now()).toString()) }
+    val weekStart = LocalDate.parse(weekText)
+    val setWeek: (LocalDate) -> Unit = { weekText = it.toString() }
 
     val stack = stackText.split('|').filter { it.isNotEmpty() }
     fun push(r: String) { stackText = (stack + r).joinToString("|") }
@@ -38,14 +45,20 @@ fun MiseRoot() {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         val open = { push("settings") }
                         when (dest) {
-                            Dest.Plan -> PlanScreen(open)
+                            Dest.Plan -> PlanScreen(
+                                weekStart = weekStart,
+                                onWeek = setWeek,
+                                onSettings = open,
+                                onBuildList = { dest = Dest.List },
+                                onGoToRecipes = { dest = Dest.Recipes },
+                            )
                             Dest.Recipes -> RecipesScreen(
                                 onSettings = open,
                                 onOpen = { push("recipe:$it") },
                                 onOpenDraft = { push("draft:$it") },
                                 onNew = { push("edit:new") },
                             )
-                            Dest.List -> ListScreen(open)
+                            Dest.List -> ListScreen(weekStart, setWeek, open, onAddItem = { showAddItem = true })
                             Dest.Pantry -> PantryScreen(open)
                         }
                     }
@@ -95,7 +108,15 @@ fun MiseRoot() {
                     dest = Dest.Recipes
                     push("edit:new")
                 },
+                onListItem = {
+                    showAdd = false
+                    showAddItem = true
+                },
             )
         }
+        if (showAddItem) {
+            AddItemDialog(weekStart, onDone = { showAddItem = false; if (stack.isEmpty()) dest = Dest.List })
+        }
+        if (splash) OpeningScreen(onDone = { splash = false })
     }
 }

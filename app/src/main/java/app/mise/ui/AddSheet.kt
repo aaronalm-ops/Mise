@@ -29,12 +29,12 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The centre Add action (kept by Aaron, 26 Oct 2026). Panels v2 frame: task heading, reachable
- * Close, then the choices. New recipe is live (M1); List item arrives in M2, Recipe from photo
- * in Phase 2.
+ * Close, then the choices. New recipe and List item are live; Recipe from photo arrives in
+ * Phase 2.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit) {
+fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> Unit) {
     val c = Mise.colours
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -51,7 +51,7 @@ fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit) {
             }
             Spacer(Modifier.height(12.dp))
             AddChoice(MiseIcons.Library, "New recipe", "Write it with servings and swaps", onClick = onNewRecipe)
-            AddChoice(MiseIcons.List, "Item on the grocery list", "Coming with the list")
+            AddChoice(MiseIcons.List, "Item on the grocery list", "Milk, tissues, anything extra", onClick = onListItem)
             AddChoice(MiseIcons.Camera, "Recipe from a photo", "Phase 2")
         }
     }

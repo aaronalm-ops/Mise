@@ -13,6 +13,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** Shared ingredient catalogue, so "Onion" in five recipes is one ingredient (merged in M2). */
@@ -104,6 +106,42 @@ data class DraftEntity(
     val title: String,
     val json: String,
     val updatedAt: Long,
+)
+
+/** A dish on a day and meal, with its own servings and chosen swap options (indices, comma list). */
+@Entity(
+    tableName = "plan_entries",
+    foreignKeys = [ForeignKey(entity = RecipeEntity::class, parentColumns = ["id"], childColumns = ["recipeId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index("recipeId"), Index("date")],
+)
+data class PlanEntryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** ISO date, e.g. 2026-10-27. */
+    val date: String,
+    val meal: String,
+    val recipeId: Long,
+    val servings: Int,
+    val choices: String,
+    val createdAt: Long,
+)
+
+/** A ticked grocery line for a week. A row exists only while the line is ticked. */
+@Entity(tableName = "list_checks", primaryKeys = ["weekStart", "itemKey"])
+data class ListCheckEntity(
+    val weekStart: String,
+    val itemKey: String,
+    val checkedAt: Long,
+)
+
+/** A one-off item typed onto a week's list (milk, tissues). */
+@Entity(tableName = "list_extras", indices = [Index("weekStart")])
+data class ListExtraEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val weekStart: String,
+    val name: String,
+    val qty: String,
+    val checked: Boolean,
+    val createdAt: Long,
 )
 
 data class IngredientRow(
@@ -212,14 +250,62 @@ interface RecipeDao {
 
     @Query("DELETE FROM drafts WHERE id = :id")
     suspend fun deleteDraft(id: Long)
+
+    // M2: plan and list
+
+    @Query("SELECT p.* FROM plan_entries p JOIN recipes r ON r.id = p.recipeId WHERE p.date >= :from AND p.date <= :to ORDER BY p.date, p.createdAt")
+    fun observePlan(from: String, to: String): Flow<List<PlanEntryEntity>>
+
+    @Query("SELECT * FROM plan_entries WHERE id = :id")
+    suspend fun planEntry(id: Long): PlanEntryEntity?
+
+    @Insert
+    suspend fun insertPlan(e: PlanEntryEntity): Long
+
+    @Update
+    suspend fun updatePlan(e: PlanEntryEntity)
+
+    @Query("DELETE FROM plan_entries WHERE id = :id")
+    suspend fun deletePlan(id: Long)
+
+    @Query("SELECT itemKey FROM list_checks WHERE weekStart = :week")
+    fun observeChecks(week: String): Flow<List<String>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun check(c: ListCheckEntity)
+
+    @Query("DELETE FROM list_checks WHERE weekStart = :week AND itemKey = :key")
+    suspend fun uncheck(week: String, key: String)
+
+    @Query("SELECT * FROM list_extras WHERE weekStart = :week ORDER BY createdAt")
+    fun observeExtras(week: String): Flow<List<ListExtraEntity>>
+
+    @Insert
+    suspend fun insertExtra(e: ListExtraEntity): Long
+
+    @Query("UPDATE list_extras SET checked = :checked WHERE id = :id")
+    suspend fun setExtraChecked(id: Long, checked: Boolean)
+
+    @Query("DELETE FROM list_extras WHERE id = :id")
+    suspend fun deleteExtra(id: Long)
+
+    @Query("SELECT * FROM ingredients")
+    fun observeIngredients(): Flow<List<IngredientEntity>>
+
+    @Query("UPDATE ingredients SET aisle = :aisle WHERE nameKey = :key")
+    suspend fun setAisle(key: String, aisle: String)
+
+    @Query("UPDATE ingredients SET isStaple = :staple WHERE nameKey = :key")
+    suspend fun setStaple(key: String, staple: Boolean)
 }
 
 @Database(
     entities = [
         IngredientEntity::class, RecipeEntity::class, StepEntity::class, SlotEntity::class,
         OptionEntity::class, RecipeIngredientEntity::class, DraftEntity::class,
+        PlanEntryEntity::class, ListCheckEntity::class, ListExtraEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class MiseDb : RoomDatabase() {
@@ -228,8 +314,31 @@ abstract class MiseDb : RoomDatabase() {
     companion object {
         @Volatile private var instance: MiseDb? = null
 
+        /** M1 to M2: adds the plan and the list. Recipes are untouched. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `plan_entries` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `date` TEXT NOT NULL, " +
+                        "`meal` TEXT NOT NULL, `recipeId` INTEGER NOT NULL, `servings` INTEGER NOT NULL, `choices` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, FOREIGN KEY(`recipeId`) REFERENCES `recipes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_plan_entries_recipeId` ON `plan_entries` (`recipeId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_plan_entries_date` ON `plan_entries` (`date`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `list_checks` (`weekStart` TEXT NOT NULL, `itemKey` TEXT NOT NULL, " +
+                        "`checkedAt` INTEGER NOT NULL, PRIMARY KEY(`weekStart`, `itemKey`))",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `list_extras` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `weekStart` TEXT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `qty` TEXT NOT NULL, `checked` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_list_extras_weekStart` ON `list_extras` (`weekStart`)")
+            }
+        }
+
         fun get(context: Context): MiseDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, MiseDb::class.java, "mise.db")
+                .addMigrations(MIGRATION_1_2)
                 .build()
                 .also { instance = it }
         }

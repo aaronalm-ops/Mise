@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed (monochrome) launcher icon: the stamp's ring and lowercase m as lines. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M54,27 A27,27 0 1,1 53.99,27 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5" />
+    <path
+        android:pathData="M41,64 V50 M41,53 A6.5,6.5 0 0,1 54,53 V64 M54,53 A6.5,6.5 0 0,1 67,53 V64"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
