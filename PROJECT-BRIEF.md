@@ -45,5 +45,8 @@ One app holding all our recipes. Pick meals for the week (or a day), get one com
 - M0 skeleton released 27 Oct 2026: v0.1.0 on github.com/aaronalm-ops/Mise/releases (all five M0 checks passed on Aaron's phone)
 - M1 recipes released 27 Oct 2026: v0.2.0 (scaling unit tests pass on CI; not yet checked on a phone)
 
+- Folio import released 27 Oct 2026: v0.4.0, Settings > Import recipes (file kept in Projects\Mise-import, never in this public repo)
+- M3 sharing released 27 Oct 2026: v0.5.0. Uses Folio's Supabase project (mise_* tables, supabase/mise-setup.sql); server details come from GitHub secrets
+
 ## Open questions
 - Where the Folio recipes sit (one folder or scattered) and roughly how many
