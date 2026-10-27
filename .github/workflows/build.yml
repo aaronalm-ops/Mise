@@ -73,7 +73,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -o pipefail
-          ./gradlew testReleaseUnitTest assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+          ./gradlew testDebugUnitTest assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
 
       # The full log is not reachable from Claude's tools, so on failure the key lines are
       # published as one error annotation (readable through the checks API).
