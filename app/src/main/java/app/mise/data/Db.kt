@@ -306,7 +306,7 @@ interface RecipeDao {
         PlanEntryEntity::class, ListCheckEntity::class, ListExtraEntity::class,
     ],
     version = 2,
-    exportSchema = true,
+    exportSchema = false,
 )
 abstract class MiseDb : RoomDatabase() {
     abstract fun recipes(): RecipeDao

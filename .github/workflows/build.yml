@@ -85,13 +85,6 @@ jobs:
             | head -250 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}' > summary.txt
           echo "::error title=Build failure::$(cat summary.txt)"
 
-      - name: Show database schema (for migration checks)
-        if: success()
-        shell: bash
-        run: |
-          f=$(ls app/schemas/*/2.json 2>/dev/null | head -1)
-          [ -n "$f" ] && python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print('::notice title=Schema::'+'%0A'.join(e['createSql'].replace('${TABLE_NAME}',e['tableName'])+' | '+' ; '.join(i['createSql'].replace('${TABLE_NAME}',e['tableName']) for i in e.get('indices',[])) for e in d['database']['entities'] if e['tableName'] in ('plan_entries','list_checks','list_extras')))" "$f" || true
-
       - name: Rename APK
         shell: bash
         env:
