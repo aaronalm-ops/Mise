@@ -160,12 +160,13 @@ data class RecipeSummaryRow(
     val baseServings: Int,
     val slotCount: Int,
     val ingredientCount: Int,
+    val tags: String,
 )
 
 @Dao
 interface RecipeDao {
     @Query(
-        "SELECT r.id, r.title, r.cuisine, r.baseServings, " +
+        "SELECT r.id, r.title, r.cuisine, r.baseServings, r.tags, " +
             "(SELECT COUNT(*) FROM variant_slots s WHERE s.recipeId = r.id) AS slotCount, " +
             "(SELECT COUNT(*) FROM recipe_ingredients i WHERE i.recipeId = r.id AND i.optionId IS NULL) AS ingredientCount " +
             "FROM recipes r ORDER BY r.title COLLATE NOCASE",
@@ -177,6 +178,9 @@ interface RecipeDao {
 
     @Query("SELECT * FROM recipes WHERE id = :id")
     suspend fun recipe(id: Long): RecipeEntity?
+
+    @Query("SELECT title FROM recipes")
+    suspend fun allTitles(): List<String>
 
     @Query("SELECT * FROM recipe_steps WHERE recipeId = :id ORDER BY position")
     suspend fun steps(id: Long): List<StepEntity>

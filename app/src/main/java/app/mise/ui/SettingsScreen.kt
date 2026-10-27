@@ -2,6 +2,8 @@ package app.mise.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +20,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -47,6 +51,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .navigationBarsPadding()
                 .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
         ) {
+            SectionLabel("Recipes")
+            ImportRow()
             SectionLabel("Display")
             Card { InfoRow("Theme", "Follows your phone") }
             SectionLabel("About")
@@ -58,6 +64,54 @@ fun SettingsScreen(onBack: () -> Unit) {
                 MakerCredit()
             }
         }
+    }
+}
+
+/**
+ * Import recipes from a Mise recipe file (made from the Folio export). Opens the phone's file
+ * picker, imports, and says how many came in. Titles already in Mise are skipped.
+ */
+@Composable
+private fun ImportRow() {
+    val c = Mise.colours
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val repo = app.mise.data.RecipeRepo.get(context)
+    var busy by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var result by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        repo.scope.launch {
+            val message = runCatching {
+                val text = context.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) }
+                val (imported, skipped) = repo.importFile(text)
+                buildString {
+                    append(if (imported == 1) "1 recipe imported." else "$imported recipes imported.")
+                    if (skipped > 0) append(if (skipped == 1) " 1 was already in Mise and was skipped." else " $skipped were already in Mise and were skipped.")
+                    if (imported > 0) append(" They are marked To check in Recipes.")
+                }
+            }.getOrElse { "Could not import that file. " + (it.message ?: "") }
+            busy = false
+            result = message
+        }
+    }
+    Card {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                .clickable(enabled = !busy, role = androidx.compose.ui.semantics.Role.Button) { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(if (busy) "Importing" else "Import recipes", style = Mise.type.bodyM, color = c.text)
+                Text("From a Mise recipe file, e.g. your Folio export", style = Mise.type.bodyS, color = c.text2)
+            }
+        }
+    }
+    result?.let { msg ->
+        ConfirmDialog(title = "Import", body = msg, confirm = "Done", dismiss = "Close", onConfirm = { result = null }, onDismiss = { result = null })
     }
 }
 

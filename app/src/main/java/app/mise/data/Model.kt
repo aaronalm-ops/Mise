@@ -39,6 +39,7 @@ data class RecipeSummary(
     val baseServings: Int,
     val slotCount: Int,
     val ingredientCount: Int,
+    val toCheck: Boolean = false,
 )
 
 data class DraftSummary(val id: Long, val title: String, val recipeId: Long?, val updatedAt: Long)

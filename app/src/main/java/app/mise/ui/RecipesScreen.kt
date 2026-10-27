@@ -109,6 +109,10 @@ private fun RecipeRow(r: RecipeSummary, onClick: () -> Unit) {
             }.joinToString(" · ")
             Text(meta, style = Mise.type.bodyS, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (r.toCheck) {
+            Spacer(Modifier.width(8.dp))
+            Text("TO CHECK", style = Mise.type.labelS, color = c.text2)
+        }
     }
 }
 
