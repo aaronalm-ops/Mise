@@ -12,6 +12,10 @@ val envKeystorePath: String? = System.getenv("KEYSTORE_PATH")
 val envKeystorePassword: String? = System.getenv("KEYSTORE_PASSWORD")
 val envKeyAlias: String? = System.getenv("KEY_ALIAS")
 val envKeyPassword: String? = System.getenv("KEY_PASSWORD")
+// Household sharing server (Supabase). Injected from GitHub secrets so they are not in the
+// public repository; a build without them simply has sharing switched off.
+val supabaseUrl: String = System.getenv("SUPABASE_URL") ?: ""
+val supabaseAnonKey: String = System.getenv("SUPABASE_ANON_KEY") ?: ""
 val hasReleaseKey: Boolean =
     !envKeystorePath.isNullOrBlank() &&
         !envKeystorePassword.isNullOrBlank() &&
@@ -29,6 +33,8 @@ android {
         targetSdk = 36
         versionCode = envVersionCode
         versionName = envVersionName
+        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }
 
     signingConfigs {

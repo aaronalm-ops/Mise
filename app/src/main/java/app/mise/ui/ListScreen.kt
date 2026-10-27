@@ -72,6 +72,7 @@ fun ListScreen(weekStart: LocalDate, onWeek: (LocalDate) -> Unit, onSettings: ()
             actionIcon = MiseIcons.Create, actionLabel = "Add an item", onAction = onAddItem,
         )
         WeekNav(weekStart, onWeek)
+        syncLine()?.let { Text(it.uppercase(), style = Mise.type.labelS, color = c.text2, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         ) {

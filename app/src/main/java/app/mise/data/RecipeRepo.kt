@@ -59,8 +59,8 @@ class RecipeRepo private constructor(private val db: MiseDb) {
     }
 
     /** Saves the editor as a recipe (new or replacing the old one) and returns its id. */
-    suspend fun save(s: EditorState, source: String = "manual"): Long = withContext(Dispatchers.IO) {
-        db.withTransaction {
+    suspend fun save(s: EditorState, source: String = "manual", track: Boolean = true): Long = withContext(Dispatchers.IO) {
+        val savedId = db.withTransaction {
             val now = System.currentTimeMillis()
             val base = RecipeEntity(
                 title = s.title.trim(), cuisine = s.cuisine.trim(),
@@ -105,33 +105,48 @@ class RecipeRepo private constructor(private val db: MiseDb) {
             dao.insertSteps(s.steps.map { it.text.trim() }.filter { it.isNotEmpty() }.mapIndexed { n, t -> StepEntity(recipeId = id, position = n, text = t) })
             id
         }
+        if (track) MiseDb.mark(db, "recipe", savedId.toString())
+        savedId
     }
 
     /**
-     * Imports a Mise recipe file ({"format": "mise-recipes", "recipes": [...]}). Recipes whose
-     * title already exists are skipped, so importing the same file twice is safe.
-     * Returns (imported, skipped).
+     * Imports a Mise recipe file ({"format": "mise-recipes", "recipes": [...]}). A recipe whose
+     * title is already in Mise is skipped, unless it came from the same source and is still
+     * marked To check (never reviewed): then the new version replaces it. Importing the same
+     * file twice is safe. Returns (added, updated, skipped).
      */
-    suspend fun importFile(json: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    suspend fun importFile(json: String): Triple<Int, Int, Int> = withContext(Dispatchers.IO) {
         val root = org.json.JSONObject(json)
         require(root.optString("format") == "mise-recipes") { "This is not a Mise recipe file." }
         val list = root.getJSONArray("recipes")
         val source = root.optString("source", "import").lowercase()
-        val existing = dao.allTitles().map { it.trim().lowercase() }.toMutableSet()
-        var imported = 0
+        val existing = dao.titleRows().associateBy { it.title.trim().lowercase() }.toMutableMap()
+        val seen = mutableSetOf<String>()
+        var added = 0
+        var updated = 0
         var skipped = 0
         for (i in 0 until list.length()) {
             val state = EditorState.fromJson(list.getJSONObject(i).toString())
             val key = state.title.trim().lowercase()
-            if (key.isEmpty() || key in existing) { skipped++; continue }
-            save(state.copy(recipeId = null), source)
-            existing += key
-            imported++
+            if (key.isEmpty() || key in seen) { skipped++; continue }
+            seen += key
+            val old = existing[key]
+            val unreviewed = old != null && old.source == source &&
+                old.tags.split(',').any { it.trim().equals("To check", ignoreCase = true) }
+            when {
+                old == null -> { save(state.copy(recipeId = null), source); added++ }
+                unreviewed -> { save(state.copy(recipeId = old!!.id), source); updated++ }
+                else -> skipped++
+            }
         }
-        imported to skipped
+        Triple(added, updated, skipped)
     }
 
-    suspend fun delete(id: Long) = withContext(Dispatchers.IO) { dao.deleteRecipe(id) }
+    suspend fun delete(id: Long) = withContext(Dispatchers.IO) {
+        dao.planIdsForRecipe(id).forEach { MiseDb.markDeleted(db, "plan", it.toString()) }
+        MiseDb.markDeleted(db, "recipe", id.toString())
+        dao.deleteRecipe(id)
+    }
 
     // Drafts
 

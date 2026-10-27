@@ -144,6 +144,22 @@ data class ListExtraEntity(
     val createdAt: Long,
 )
 
+/** Links a local item to its shared row. dirty counts local edits not yet sent. */
+@Entity(tableName = "sync_rows", primaryKeys = ["kind", "localKey"], indices = [Index(value = ["kind", "uid"], unique = true)])
+data class SyncRowEntity(
+    val kind: String,
+    val localKey: String,
+    val uid: String,
+    val dirty: Int,
+)
+
+/** A shared item deleted here, waiting to be marked deleted for the household. */
+@Entity(tableName = "sync_deletes", primaryKeys = ["kind", "uid"])
+data class SyncDeleteEntity(
+    val kind: String,
+    val uid: String,
+)
+
 data class IngredientRow(
     val optionId: Long?,
     val position: Int,
@@ -272,6 +288,9 @@ interface RecipeDao {
     @Query("DELETE FROM plan_entries WHERE id = :id")
     suspend fun deletePlan(id: Long)
 
+    @Query("SELECT id FROM plan_entries WHERE recipeId = :recipeId")
+    suspend fun planIdsForRecipe(recipeId: Long): List<Long>
+
     @Query("SELECT itemKey FROM list_checks WHERE weekStart = :week")
     fun observeChecks(week: String): Flow<List<String>>
 
@@ -301,6 +320,70 @@ interface RecipeDao {
 
     @Query("UPDATE ingredients SET isStaple = :staple WHERE nameKey = :key")
     suspend fun setStaple(key: String, staple: Boolean)
+
+    @Query("SELECT id, title, tags, source FROM recipes")
+    suspend fun titleRows(): List<TitleRow>
+
+    // M3: used by sync
+
+    @Query("SELECT * FROM list_extras WHERE id = :id")
+    suspend fun extra(id: Long): ListExtraEntity?
+
+    @Update
+    suspend fun updateExtra(e: ListExtraEntity)
+
+    @Query("SELECT COUNT(*) FROM list_checks WHERE weekStart = :week AND itemKey = :key")
+    suspend fun isChecked(week: String, key: String): Int
+
+    @Query("SELECT * FROM ingredients WHERE nameKey = :key")
+    suspend fun ingredient(key: String): IngredientEntity?
+}
+
+data class TitleRow(val id: Long, val title: String, val tags: String, val source: String)
+
+@Dao
+interface SyncDao {
+    @Query("SELECT * FROM sync_rows WHERE kind = :kind AND localKey = :key")
+    suspend fun row(kind: String, key: String): SyncRowEntity?
+
+    @Query("SELECT * FROM sync_rows WHERE kind = :kind AND uid = :uid")
+    suspend fun byUid(kind: String, uid: String): SyncRowEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(r: SyncRowEntity)
+
+    @Query("UPDATE sync_rows SET dirty = 0 WHERE kind = :kind AND localKey = :key AND dirty = :dirty")
+    suspend fun clean(kind: String, key: String, dirty: Int)
+
+    @Query("SELECT * FROM sync_rows WHERE dirty > 0")
+    suspend fun dirty(): List<SyncRowEntity>
+
+    @Query("DELETE FROM sync_rows WHERE kind = :kind AND localKey = :key")
+    suspend fun remove(kind: String, key: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun tomb(d: SyncDeleteEntity)
+
+    @Query("SELECT * FROM sync_deletes")
+    suspend fun tombs(): List<SyncDeleteEntity>
+
+    @Query("DELETE FROM sync_deletes WHERE kind = :kind AND uid = :uid")
+    suspend fun clearTomb(kind: String, uid: String)
+
+    @Query("SELECT id FROM recipes")
+    suspend fun recipeIds(): List<Long>
+
+    @Query("SELECT id FROM plan_entries")
+    suspend fun planIds(): List<Long>
+
+    @Query("SELECT weekStart || '|' || itemKey FROM list_checks")
+    suspend fun checkKeys(): List<String>
+
+    @Query("SELECT id FROM list_extras")
+    suspend fun extraIds(): List<Long>
+
+    @Query("SELECT nameKey FROM ingredients WHERE aisle != '' OR isStaple = 1")
+    suspend fun ingredientKeys(): List<String>
 }
 
 @Database(
@@ -308,15 +391,52 @@ interface RecipeDao {
         IngredientEntity::class, RecipeEntity::class, StepEntity::class, SlotEntity::class,
         OptionEntity::class, RecipeIngredientEntity::class, DraftEntity::class,
         PlanEntryEntity::class, ListCheckEntity::class, ListExtraEntity::class,
+        SyncRowEntity::class, SyncDeleteEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class MiseDb : RoomDatabase() {
     abstract fun recipes(): RecipeDao
+    abstract fun sync(): SyncDao
 
     companion object {
         @Volatile private var instance: MiseDb? = null
+
+        /** M2 to M3: bookkeeping for household sync. Nothing existing changes. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `sync_rows` (`kind` TEXT NOT NULL, `localKey` TEXT NOT NULL, `uid` TEXT NOT NULL, " +
+                        "`dirty` INTEGER NOT NULL, PRIMARY KEY(`kind`, `localKey`))",
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_rows_kind_uid` ON `sync_rows` (`kind`, `uid`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sync_deletes` (`kind` TEXT NOT NULL, `uid` TEXT NOT NULL, PRIMARY KEY(`kind`, `uid`))")
+            }
+        }
+
+        /** Records a local change so it is shared with the household on the next sync. */
+        suspend fun mark(db: MiseDb, kind: String, key: String) {
+            val d = db.sync()
+            val r = d.row(kind, key)
+            val uid = r?.uid ?: when (kind) {
+                // Ticks and aisle/staple settings use the same id on every phone, so two
+                // phones changing the same item meet in one shared row.
+                "check", "ingredient" -> key
+                else -> java.util.UUID.randomUUID().toString()
+            }
+            d.put(SyncRowEntity(kind, key, uid, (r?.dirty ?: 0) + 1))
+            app.mise.sync.SyncEngine.poke()
+        }
+
+        /** Records a local delete of a shared item. */
+        suspend fun markDeleted(db: MiseDb, kind: String, key: String) {
+            val d = db.sync()
+            val r = d.row(kind, key) ?: return
+            d.tomb(SyncDeleteEntity(kind, r.uid))
+            d.remove(kind, key)
+            app.mise.sync.SyncEngine.poke()
+        }
 
         /** M1 to M2: adds the plan and the list. Recipes are untouched. */
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -342,7 +462,7 @@ abstract class MiseDb : RoomDatabase() {
 
         fun get(context: Context): MiseDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, MiseDb::class.java, "mise.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 .also { instance = it }
         }

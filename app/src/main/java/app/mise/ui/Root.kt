@@ -67,7 +67,11 @@ fun MiseRoot() {
             }
             top == "settings" -> {
                 BackHandler { pop() }
-                SettingsScreen(onBack = { pop() })
+                SettingsScreen(onBack = { pop() }, onHousehold = { push("household") })
+            }
+            top == "household" -> {
+                BackHandler { pop() }
+                HouseholdScreen(onBack = { pop() })
             }
             top.startsWith("recipe:") -> {
                 val id = top.removePrefix("recipe:").toLong()

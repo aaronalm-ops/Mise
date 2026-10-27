@@ -50,36 +50,40 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
     }
 
     suspend fun addEntry(date: LocalDate, meal: Meal, recipeId: Long, servings: Int, choices: List<Int>) = withContext(Dispatchers.IO) {
-        dao.insertPlan(
+        val id = dao.insertPlan(
             PlanEntryEntity(
                 date = date.toString(), meal = meal.key, recipeId = recipeId, servings = servings,
                 choices = choices.joinToString(","), createdAt = System.currentTimeMillis(),
             ),
         )
+        MiseDb.mark(db, "plan", id.toString())
     }
 
     suspend fun updateEntry(id: Long, servings: Int, choices: List<Int>) = withContext(Dispatchers.IO) {
         dao.planEntry(id)?.let { dao.updatePlan(it.copy(servings = servings, choices = choices.joinToString(","))) }
+        MiseDb.mark(db, "plan", id.toString())
     }
 
-    suspend fun removeEntry(id: Long) = withContext(Dispatchers.IO) { dao.deletePlan(id) }
+    suspend fun removeEntry(id: Long) = withContext(Dispatchers.IO) { MiseDb.markDeleted(db, "plan", id.toString()); dao.deletePlan(id) }
 
     suspend fun setChecked(weekStart: LocalDate, key: String, checked: Boolean) = withContext(Dispatchers.IO) {
         if (checked) dao.check(ListCheckEntity(weekStart.toString(), key, System.currentTimeMillis()))
         else dao.uncheck(weekStart.toString(), key)
+        MiseDb.mark(db, "check", "$weekStart|$key")
     }
 
     suspend fun addExtra(weekStart: LocalDate, name: String, qty: String) = withContext(Dispatchers.IO) {
-        dao.insertExtra(ListExtraEntity(weekStart = weekStart.toString(), name = name.trim(), qty = qty.trim(), checked = false, createdAt = System.currentTimeMillis()))
+        val id = dao.insertExtra(ListExtraEntity(weekStart = weekStart.toString(), name = name.trim(), qty = qty.trim(), checked = false, createdAt = System.currentTimeMillis()))
+        MiseDb.mark(db, "extra", id.toString())
     }
 
-    suspend fun setExtraChecked(id: Long, checked: Boolean) = withContext(Dispatchers.IO) { dao.setExtraChecked(id, checked) }
+    suspend fun setExtraChecked(id: Long, checked: Boolean) = withContext(Dispatchers.IO) { dao.setExtraChecked(id, checked); MiseDb.mark(db, "extra", id.toString()) }
 
-    suspend fun removeExtra(id: Long) = withContext(Dispatchers.IO) { dao.deleteExtra(id) }
+    suspend fun removeExtra(id: Long) = withContext(Dispatchers.IO) { MiseDb.markDeleted(db, "extra", id.toString()); dao.deleteExtra(id) }
 
-    suspend fun setAisle(key: String, aisle: Aisle) = withContext(Dispatchers.IO) { dao.setAisle(key, aisle.key) }
+    suspend fun setAisle(key: String, aisle: Aisle) = withContext(Dispatchers.IO) { dao.setAisle(key, aisle.key); MiseDb.mark(db, "ingredient", key) }
 
-    suspend fun setStaple(key: String, staple: Boolean) = withContext(Dispatchers.IO) { dao.setStaple(key, staple) }
+    suspend fun setStaple(key: String, staple: Boolean) = withContext(Dispatchers.IO) { dao.setStaple(key, staple); MiseDb.mark(db, "ingredient", key) }
 
     companion object {
         @Volatile private var instance: PlanRepo? = null

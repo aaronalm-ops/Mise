@@ -36,7 +36,7 @@ import app.mise.BuildConfig
 import app.mise.R
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
     val c = Mise.colours
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
@@ -51,6 +51,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .navigationBarsPadding()
                 .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
         ) {
+            SectionLabel("Sharing")
+            Card {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                        .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onHousehold)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Household", style = Mise.type.bodyM, color = c.text)
+                        Text(syncLine() ?: "Share recipes, plan and list with Janice", style = Mise.type.bodyS, color = c.text2)
+                    }
+                }
+            }
             SectionLabel("Recipes")
             ImportRow()
             SectionLabel("Display")
@@ -86,11 +100,12 @@ private fun ImportRow() {
         repo.scope.launch {
             val message = runCatching {
                 val text = context.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) }
-                val (imported, skipped) = repo.importFile(text)
+                val (imported, updated, skipped) = repo.importFile(text)
                 buildString {
-                    append(if (imported == 1) "1 recipe imported." else "$imported recipes imported.")
+                    append(if (imported == 1) "1 recipe added." else "$imported recipes added.")
+                    if (updated > 0) append(if (updated == 1) " 1 updated." else " $updated updated.")
                     if (skipped > 0) append(if (skipped == 1) " 1 was already in Mise and was skipped." else " $skipped were already in Mise and were skipped.")
-                    if (imported > 0) append(" They are marked To check in Recipes.")
+                    if (imported > 0 || updated > 0) append(" They are marked To check in Recipes.")
                 }
             }.getOrElse { "Could not import that file. " + (it.message ?: "") }
             busy = false
