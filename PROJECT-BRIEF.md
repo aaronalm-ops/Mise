@@ -42,7 +42,8 @@ One app holding all our recipes. Pick meals for the week (or a day), get one com
 - Phones: Samsung Galaxy S23 Ultra (Aaron), S25+ (Janice)
 
 ## Build status
-- M0 skeleton released 27 Oct 2026: v0.1.0 on github.com/aaronalm-ops/Mise/releases (built on GitHub Actions; not yet checked on a phone)
+- M0 skeleton released 27 Oct 2026: v0.1.0 on github.com/aaronalm-ops/Mise/releases (all five M0 checks passed on Aaron's phone)
+- M1 recipes released 27 Oct 2026: v0.2.0 (scaling unit tests pass on CI; not yet checked on a phone)
 
 ## Open questions
 - Where the Folio recipes sit (one folder or scattered) and roughly how many
