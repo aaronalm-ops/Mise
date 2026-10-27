@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matte Stone (chosen by Aaron, 26 Oct 2026). Compose holds the real tokens in ui/Theme.kt. -->
+    <color name="base_light">#F1F0ED</color>
+    <color name="base_dark">#000000</color>
+    <color name="graphite">#3A3D41</color>
+    <color name="off_white">#F4F6F8</color>
+    <color name="ic_launcher_background">#3A3D41</color>
+</resources>

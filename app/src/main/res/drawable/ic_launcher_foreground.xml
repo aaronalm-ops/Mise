@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder Mise launcher mark: a bowl with three lines of steam, off-white on graphite.
+     A proper Mise logo is a separate design task. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M33,55 H75 A21,21 0 0,1 33,55 Z"
+        android:strokeColor="#F4F6F8"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M44,46 V40 M54,46 V36 M64,46 V40"
+        android:strokeColor="#F4F6F8"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round" />
+</vector>

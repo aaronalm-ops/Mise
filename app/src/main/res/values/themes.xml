@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Platform theme only sets the start-up window ground; Compose paints everything else. -->
+    <style name="Theme.Mise" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/base_light</item>
+        <item name="android:colorPrimary">@color/graphite</item>
+        <item name="android:colorAccent">@color/graphite</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
