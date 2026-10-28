@@ -203,8 +203,12 @@ object Toasts {
     var current by mutableStateOf<Toast?>(null)
         private set
 
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** Safe to call from any thread: the message is shown from the main thread. */
     fun show(text: String, action: String? = null, onAction: (() -> Unit)? = null) {
-        current = Toast(text, action, onAction)
+        val t = Toast(text, action, onAction)
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) current = t else main.post { current = t }
     }
 
     fun undo(text: String, onUndo: () -> Unit) = show(text, "Undo", onUndo)

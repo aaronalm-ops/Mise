@@ -387,6 +387,7 @@ fun PlanEntrySheet(mode: PlanSheet, days: List<LocalDate>, onDismiss: () -> Unit
                         GhostButton("Choose a dish instead", { noteMode = false }, Modifier.fillMaxWidth())
                     }
                 }
+                r == null && pendingId != null -> Unit
                 r == null -> DishChooser(
                     onPick = { choose(it) },
                     onNote = { noteMode = true },
