@@ -10,7 +10,7 @@ object Keys {
     fun new(): Long = next.incrementAndGet()
 }
 
-data class EIng(val key: Long = Keys.new(), val name: String = "", val qty: String = "", val unit: String = Measure.G.key, val note: String = "") {
+data class EIng(val key: Long = Keys.new(), val name: String = "", val qty: String = "", val unit: String = Measure.NONE.key, val note: String = "", val showNote: Boolean = false) {
     val isBlank get() = name.isBlank() && qty.isBlank() && note.isBlank()
 }
 
@@ -25,6 +25,8 @@ data class EditorState(
     val recipeId: Long? = null,
     val title: String = "",
     val cuisine: String = "",
+    val dishType: String = "",
+    val status: String = RecipeStatus.OK,
     val tags: String = "",
     val serves: Int = 4,
     val prep: String = "",
@@ -40,7 +42,7 @@ data class EditorState(
 
     fun toJson(): String = JSONObject().apply {
         put("recipeId", recipeId ?: JSONObject.NULL)
-        put("title", title); put("cuisine", cuisine); put("tags", tags); put("serves", serves)
+        put("title", title); put("cuisine", cuisine); put("dishType", dishType); put("status", status); put("tags", tags); put("serves", serves)
         put("prep", prep); put("cook", cook); put("notes", notes)
         put("ings", ingsJson(ings))
         put("slots", JSONArray().apply {
@@ -71,7 +73,7 @@ data class EditorState(
         private fun ingsFrom(a: JSONArray?): List<EIng> =
             if (a == null) emptyList() else (0 until a.length()).map { n ->
                 val o = a.getJSONObject(n)
-                EIng(name = o.optString("name"), qty = o.optString("qty"), unit = o.optString("unit", Measure.G.key), note = o.optString("note"))
+                EIng(name = o.optString("name"), qty = o.optString("qty"), unit = o.optString("unit", Measure.G.key), note = o.optString("note"), showNote = o.optString("note").isNotBlank())
             }
 
         fun fromJson(json: String): EditorState {
@@ -92,7 +94,8 @@ data class EditorState(
             val steps = o.optJSONArray("steps")?.let { a -> (0 until a.length()).map { EStep(text = a.getString(it)) } } ?: emptyList()
             return EditorState(
                 recipeId = if (o.isNull("recipeId")) null else o.optLong("recipeId"),
-                title = o.optString("title"), cuisine = o.optString("cuisine"), tags = o.optString("tags"),
+                title = o.optString("title"), cuisine = o.optString("cuisine"), dishType = o.optString("dishType"),
+                status = o.optString("status", RecipeStatus.OK).ifBlank { RecipeStatus.OK }, tags = o.optString("tags"),
                 serves = o.optInt("serves", 4), prep = o.optString("prep"), cook = o.optString("cook"),
                 notes = o.optString("notes"),
                 ings = ingsFrom(o.optJSONArray("ings")).ifEmpty { listOf(EIng()) },
@@ -103,7 +106,7 @@ data class EditorState(
 
         fun fromRecipe(r: Recipe): EditorState = EditorState(
             recipeId = r.id,
-            title = r.title, cuisine = r.cuisine, tags = r.tags.joinToString(", "),
+            title = r.title, cuisine = r.cuisine, dishType = r.dishType, status = r.status, tags = r.tags.joinToString(", "),
             serves = r.baseServings,
             prep = r.prepMins?.toString() ?: "", cook = r.cookMins?.toString() ?: "",
             notes = r.notes,
@@ -119,6 +122,7 @@ data class EditorState(
             qty = qty?.let { Scaling.plain(it) } ?: "",
             unit = unit.key,
             note = note,
+            showNote = note.isNotBlank(),
         )
     }
 }

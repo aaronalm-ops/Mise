@@ -120,13 +120,11 @@ private fun RowScope.NavItem(dest: Dest, selected: Boolean, onClick: () -> Unit)
                 modifier = Modifier.size(24.dp),
             )
         }
-        Text(
-            text = dest.label,
-            style = Mise.type.nav,
-            color = if (selected) c.text else c.text2,
-            maxLines = 1,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
-        )
+        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp)) {
+            CappedText(1.15f) {
+                Text(text = dest.label, style = Mise.type.nav, color = if (selected) c.text else c.text2, maxLines = 1)
+            }
+        }
     }
 }
 
@@ -150,6 +148,6 @@ private fun RowScope.AddItem(onAdd: () -> Unit) {
             Icon(MiseIcons.Create, contentDescription = null, tint = c.onDisc, modifier = Modifier.size(24.dp))
         }
         Spacer(Modifier.height(6.dp))
-        Text("Add", style = Mise.type.nav, color = c.text, maxLines = 1)
+        CappedText(1.15f) { Text("Add", style = Mise.type.nav, color = c.text, maxLines = 1) }
     }
 }

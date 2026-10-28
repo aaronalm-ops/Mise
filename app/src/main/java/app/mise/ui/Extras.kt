@@ -1,37 +1,37 @@
 package app.mise.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.mise.R
+import app.mise.data.Aisle
 import app.mise.data.PlanRepo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -48,57 +48,70 @@ fun MiseStamp(size: Dp, modifier: Modifier = Modifier) {
     )
 }
 
-/** Cold start only: the stamp on the ground for a moment, then a 200 ms fade. Taps wait. */
+/**
+ * Add one-off items (milk, tissues) to the week's list. The name field is focused, the aisle is
+ * guessed as you type (tap another to change it), recent items are one tap. Add keeps the sheet
+ * open for the next item; Close when done. You stay on the tab you were on.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun OpeningScreen(onDone: () -> Unit) {
-    val c = Mise.colours
-    var visible by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        delay(700)
-        visible = false
-        delay(220)
-        onDone()
-    }
-    AnimatedVisibility(visible = visible, exit = fadeOut(tween(200))) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(c.base)
-                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } } },
-            contentAlignment = Alignment.Center,
-        ) {
-            MiseStamp(184.dp)
-        }
-    }
-}
-
-/** Add a one-off item (milk, tissues) to this week's list. */
-@Composable
-fun AddItemDialog(weekStart: LocalDate, onDone: () -> Unit) {
+fun AddItemSheet(weekStart: LocalDate, onDone: () -> Unit) {
     val c = Mise.colours
     val repo = PlanRepo.get(LocalContext.current)
+    val recent by remember { repo.recentExtraNames() }.collectAsState(initial = emptyList())
     var name by remember { mutableStateOf("") }
     var qty by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDone,
-        containerColor = c.surface,
-        title = { Text("Add to the list", style = Mise.type.displayS, color = c.text) },
-        text = {
-            Column {
-                MiseField(name, { name = it }, "Item, e.g. Milk", Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
-                MiseField(qty, { qty = it }, "How much (optional)", Modifier.fillMaxWidth())
+    var picked by remember { mutableStateOf<Aisle?>(null) }
+    var added by remember { mutableStateOf(listOf<String>()) }
+    val focus = remember { FocusRequester() }
+    val confirm = Haptic.rememberConfirm()
+    val aisle = picked ?: if (name.isBlank()) null else Aisle.guess(name)
+
+    LaunchedEffect(Unit) {
+        delay(250)
+        runCatching { focus.requestFocus() }
+    }
+
+    fun add(n: String = name, q: String = qty) {
+        if (n.isBlank()) return
+        val a = picked ?: Aisle.guess(n)
+        repo.scope.launch { repo.addExtra(weekStart, n, q, a) }
+        confirm()
+        added = added + n.trim().replaceFirstChar { it.uppercase() }
+        name = ""; qty = ""; picked = null
+        runCatching { focus.requestFocus() }
+    }
+
+    MiseSheet(title = "Add to the list", eyebrow = weekTitle(weekStart), onDismiss = onDone) {
+        MiseField(
+            name, { name = it }, "Item, e.g. Milk", Modifier.fillMaxWidth(),
+            focusRequester = focus, capitalization = KeyboardCapitalization.Sentences,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            MiseField(qty, { qty = it.take(24) }, "How much (optional)", Modifier.weight(1f), imeAction = ImeAction.Done, onIme = { add() })
+            Spacer(Modifier.width(8.dp))
+            PrimaryButton("Add", { add() }, enabled = name.isNotBlank())
+        }
+        SectionLabel("Aisle", if (picked == null && aisle != null) "guessed" else null)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Aisle.entries.forEach { a ->
+                MiseChip(a.label, a == aisle) { picked = if (picked == a) null else a }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (name.isNotBlank()) {
-                    val n = name; val q = qty
-                    repo.scope.launch { repo.addExtra(weekStart, n, q) }
-                }
-                onDone()
-            }) { Text("Add", style = Mise.type.bodyM, color = if (name.isBlank()) c.text2 else c.text) }
-        },
-        dismissButton = { TextButton(onClick = onDone) { Text("Cancel", style = Mise.type.bodyM, color = c.text) } },
-    )
+        }
+        val quick = recent.filter { r -> added.none { it.equals(r, true) } }.take(8)
+        if (quick.isNotEmpty()) {
+            SectionLabel("Recent")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                quick.forEach { r -> MiseChip(r, false) { add(r, "") } }
+            }
+        }
+        if (added.isNotEmpty()) {
+            Text(
+                "Added: " + added.joinToString(", "),
+                style = Mise.type.bodyS, color = c.text2,
+                modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 14.dp),
+            )
+        }
+    }
 }

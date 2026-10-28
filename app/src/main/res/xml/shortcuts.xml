@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the Mise icon: jump straight to the list, the plan or a new recipe. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="list"
+        android:enabled="true"
+        android:icon="@drawable/ic_notify"
+        android:shortcutShortLabel="@string/shortcut_list">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aaronalmeida.mise"
+            android:targetClass="app.mise.MainActivity">
+            <extra android:name="open" android:value="list" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="plan"
+        android:enabled="true"
+        android:icon="@drawable/ic_notify"
+        android:shortcutShortLabel="@string/shortcut_plan">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aaronalmeida.mise"
+            android:targetClass="app.mise.MainActivity">
+            <extra android:name="open" android:value="plan" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="recipe"
+        android:enabled="true"
+        android:icon="@drawable/ic_notify"
+        android:shortcutShortLabel="@string/shortcut_recipe">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aaronalmeida.mise"
+            android:targetClass="app.mise.MainActivity">
+            <extra android:name="open" android:value="new-recipe" />
+        </intent>
+    </shortcut>
+</shortcuts>

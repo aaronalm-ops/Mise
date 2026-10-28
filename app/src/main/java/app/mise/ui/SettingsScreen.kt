@@ -1,9 +1,15 @@
 package app.mise.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import kotlinx.coroutines.launch
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,68 +18,96 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import app.mise.BuildConfig
 import app.mise.R
+import app.mise.Reminder
+import app.mise.data.Prefs
+import app.mise.data.RecipeRepo
+import java.time.DayOfWeek
+import java.time.format.TextStyle
+import java.util.Locale
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
     val c = Mise.colours
+    val ctx = LocalContext.current
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader(
-            eyebrow = "",
-            title = "Settings",
-            leading = { IconTile(MiseIcons.Back, "Back", onBack) },
-        )
+        ScreenHeader(eyebrow = "", title = "Settings", leading = { IconTile(MiseIcons.Back, "Back", onClick = onBack) })
         Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
         ) {
             SectionLabel("Sharing")
             Card {
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                        .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onHousehold)
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                NavRow("Household", syncLine() ?: "Share recipes, plan and list with Janice", onHousehold)
+            }
+
+            SectionLabel("Planning")
+            Card {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Household", style = Mise.type.bodyM, color = c.text)
-                        Text(syncLine() ?: "Share recipes, plan and list with Janice", style = Mise.type.bodyS, color = c.text2)
+                        Text("Servings for a dish", style = Mise.type.body, color = c.text)
+                        Text(if (Prefs.defaultServings == 0) "Each recipe's own" else "New dishes start at this", style = Mise.type.bodyS, color = c.text2)
+                    }
+                    Stepper(
+                        Prefs.defaultServings, { Prefs.setDefaultServings(it) }, min = 0, max = 12, label = "servings",
+                        display = if (Prefs.defaultServings == 0) "–" else Prefs.defaultServings.toString(),
+                    )
+                }
+                Divider()
+                Column(Modifier.padding(vertical = 12.dp)) {
+                    Text("Week starts on", style = Mise.type.body, color = c.text, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+                    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(DayOfWeek.MONDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY).forEach { d ->
+                            MiseChip(d.getDisplayName(TextStyle.FULL, Locale.UK), Prefs.weekStart == d) { Prefs.setWeekStart(d) }
+                        }
                     }
                 }
             }
+
+            SectionLabel("Planning reminder")
+            ReminderCard()
+
             SectionLabel("Recipes")
-            ImportRow()
+            ImportCard()
+
             SectionLabel("Display")
-            Card { InfoRow("Theme", "Follows your phone") }
+            Card {
+                Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MiseChip("Phone", Prefs.theme == Prefs.Theme.SYSTEM) { Prefs.setTheme(Prefs.Theme.SYSTEM) }
+                    MiseChip("Light", Prefs.theme == Prefs.Theme.LIGHT) { Prefs.setTheme(Prefs.Theme.LIGHT) }
+                    MiseChip("Dark", Prefs.theme == Prefs.Theme.DARK) { Prefs.setTheme(Prefs.Theme.DARK) }
+                }
+            }
+
             SectionLabel("About")
             Card {
                 Box(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp), contentAlignment = Alignment.Center) { MiseStamp(112.dp) }
                 InfoRow("App", "Mise")
-                Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(c.line))
+                Divider(Modifier.padding(horizontal = 16.dp))
                 InfoRow("Version", BuildConfig.VERSION_NAME)
                 MakerCredit()
             }
@@ -81,62 +115,109 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
     }
 }
 
-/**
- * Import recipes from a Mise recipe file (made from the Folio export). Opens the phone's file
- * picker, imports, and says how many came in. Titles already in Mise are skipped.
- */
 @Composable
-private fun ImportRow() {
+private fun NavRow(title: String, sub: String, onClick: () -> Unit) {
     val c = Mise.colours
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val repo = app.mise.data.RecipeRepo.get(context)
-    var busy by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    var result by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        busy = true
-        repo.scope.launch {
-            val message = runCatching {
-                val text = context.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) }
-                val (imported, updated, skipped) = repo.importFile(text)
-                buildString {
-                    append(if (imported == 1) "1 recipe added." else "$imported recipes added.")
-                    if (updated > 0) append(if (updated == 1) " 1 updated." else " $updated updated.")
-                    if (skipped > 0) append(if (skipped == 1) " 1 was already in Mise and was skipped." else " $skipped were already in Mise and were skipped.")
-                    if (imported > 0 || updated > 0) append(" They are marked To check in Recipes.")
-                }
-            }.getOrElse { "Could not import that file. " + (it.message ?: "") }
-            busy = false
-            result = message
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Mise.type.bodyM, color = c.text)
+            Text(sub, style = Mise.type.bodyS, color = c.text2)
+        }
+        Icon(MiseIcons.Forward, contentDescription = null, tint = c.text2, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** A nudge to plan next week, on the day and hour you choose. Tapping it opens next week. */
+@Composable
+private fun ReminderCard() {
+    val c = Mise.colours
+    val ctx = LocalContext.current
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            Prefs.setReminder(true); Reminder.schedule(ctx)
+            Toasts.show("Reminder on: " + reminderText())
+        } else {
+            Toasts.show("Notifications are off for Mise. Turn them on in the phone's settings to get the reminder.")
+        }
+    }
+    fun turnOn() {
+        val needs = Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (needs) {
+            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            Prefs.setReminder(true); Reminder.schedule(ctx)
+            Toasts.show("Reminder on: " + reminderText())
         }
     }
     Card {
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                .clickable(enabled = !busy, role = androidx.compose.ui.semantics.Role.Button) { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(if (busy) "Importing" else "Import recipes", style = Mise.type.bodyM, color = c.text)
-                Text("From a Mise recipe file, e.g. your Folio export", style = Mise.type.bodyS, color = c.text2)
+        MiseSwitch(
+            Prefs.reminderOn,
+            { on -> if (on) turnOn() else { Prefs.setReminder(false); Reminder.schedule(ctx) } },
+            "Remind me to plan the week",
+            sub = if (Prefs.reminderOn) reminderText() else "Off",
+        )
+        if (Prefs.reminderOn) {
+            Divider()
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DayOfWeek.values().forEach { d ->
+                    MiseChip(d.getDisplayName(TextStyle.SHORT, Locale.UK), Prefs.reminderDay == d) {
+                        Prefs.setReminder(true, day = d); Reminder.schedule(ctx)
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Time", style = Mise.type.body, color = c.text, modifier = Modifier.weight(1f))
+                Stepper(
+                    Prefs.reminderHour, { Prefs.setReminder(true, hour = it); Reminder.schedule(ctx) }, min = 6, max = 22, label = "hour",
+                    display = "%02d:00".format(Prefs.reminderHour),
+                )
             }
         }
     }
-    result?.let { msg ->
-        ConfirmDialog(title = "Import", body = msg, confirm = "Done", dismiss = "Close", onConfirm = { result = null }, onDismiss = { result = null })
+}
+
+private fun reminderText(): String =
+    Prefs.reminderDay.getDisplayName(TextStyle.FULL, Locale.UK) + "s at " + "%02d:00".format(Prefs.reminderHour)
+
+/**
+ * Import recipes from a Mise recipe file (made from the Folio export). The result is kept by the
+ * app, so it is still here if you leave Settings while it runs.
+ */
+@Composable
+private fun ImportCard() {
+    val c = Mise.colours
+    val context = LocalContext.current
+    val repo = RecipeRepo.get(context)
+    val busy by repo.importing.collectAsState()
+    val result by repo.importResult.collectAsState()
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching { context.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
+        if (text == null) Toasts.show("Could not open that file.") else repo.importFile(text)
+    }
+    Card {
+        NavRow(
+            if (busy) "Importing…" else "Import recipes",
+            "From a Mise recipe file, e.g. your Folio export",
+        ) { if (!busy) picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
+        result?.let { msg ->
+            Divider()
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(msg, style = Mise.type.bodyS, color = c.text, modifier = Modifier.weight(1f))
+                TextAction("Done", { repo.clearImportResult() })
+            }
+        }
     }
 }
 
 @Composable
 private fun InfoRow(label: String, value: String) {
     val c = Mise.colours
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = Mise.type.body, color = c.text, modifier = Modifier.weight(1f))
         Text(value, style = Mise.type.bodyS, color = c.text2)
     }
@@ -146,16 +227,13 @@ private fun InfoRow(label: String, value: String) {
  * The approved About credit (Aaron Almeida Brand/SIGNATURE-LAYOUT.md), after the app and version:
  * the canonical two-colour Instinct VectorDrawable, 48 dp wide at the 720:544 ratio, untinted so
  * the cyan stays; 12 dp gap; "by Aaron Almeida" at 14/22 sp, prefix normal, name medium, kept
- * together on one line with non-breaking spaces. Charcoal body on light, off-white on dark.
+ * together on one line. Charcoal body on light, off-white on dark.
  */
 @Composable
 fun MakerCredit() {
     val c = Mise.colours
     Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 16.dp)
-            .semantics(mergeDescendants = true) {},
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp).semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
@@ -167,7 +245,7 @@ fun MakerCredit() {
         Spacer(Modifier.width(12.dp))
         Text(
             buildAnnotatedString {
-                append("by ")
+                append("by ")
                 withStyle(SpanStyle(fontWeight = FontWeight.W500)) { append("Aaron Almeida") }
             },
             style = Mise.type.credit,

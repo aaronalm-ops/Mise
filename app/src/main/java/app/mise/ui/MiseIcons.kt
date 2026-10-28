@@ -59,4 +59,13 @@ object MiseIcons {
     val Camera: ImageVector by lazy {
         icon("camera", listOf("M5 8h3l1.5-2h5L16 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z", "M9 13a3 3 0 1 0 6 0a3 3 0 1 0-6 0Z"))
     }
+    val More: ImageVector by lazy {
+        icon("more", emptyList(), listOf("M5 12a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0Z", "M10.5 12a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0Z", "M16 12a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0Z"))
+    }
+    val Handle: ImageVector by lazy { icon("handle", listOf("M6 9h12M6 15h12")) }
+    val Cook: ImageVector by lazy {
+        icon("cook", listOf("M4 11h16v2a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6v-2Z", "M2 11h2M20 11h2", "M9 4.5c0 1.2 1 1.3 1 2.5M13.5 4.5c0 1.2 1 1.3 1 2.5"))
+    }
+    val Share: ImageVector by lazy { icon("share", listOf("M12 4v11M8 8l4-4 4 4", "M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5")) }
+    val Repeat: ImageVector by lazy { icon("repeat", listOf("M5 10a5 5 0 0 1 5-5h7M14 2l3 3-3 3", "M19 14a5 5 0 0 1-5 5H7M10 22l-3-3 3-3")) }
 }

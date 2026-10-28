@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Mise</string>
+    <string name="shortcut_list">Grocery list</string>
+    <string name="shortcut_plan">Plan the week</string>
+    <string name="shortcut_recipe">New recipe</string>
 </resources>

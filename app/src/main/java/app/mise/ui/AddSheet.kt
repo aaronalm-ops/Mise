@@ -29,12 +29,11 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The centre Add action (kept by Aaron, 26 Oct 2026). Panels v2 frame: task heading, reachable
- * Close, then the choices. New recipe and List item are live; Recipe from photo arrives in
- * Phase 2.
+ * Close, then the choices. Recipe from a photo joins these in Phase 2.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> Unit) {
+fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> Unit, onPlanDish: () -> Unit) {
     val c = Mise.colours
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -47,12 +46,12 @@ fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> U
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 16.dp, bottom = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Add", style = Mise.type.displayS, color = c.text, modifier = Modifier.weight(1f))
-                IconTile(MiseIcons.Close, "Close", onDismiss)
+                IconTile(MiseIcons.Close, "Close", onClick = onDismiss)
             }
             Spacer(Modifier.height(12.dp))
+            AddChoice(MiseIcons.Calendar, "Dish on the plan", "Pick a day and a recipe", onClick = onPlanDish)
             AddChoice(MiseIcons.Library, "New recipe", "Write it with servings and swaps", onClick = onNewRecipe)
             AddChoice(MiseIcons.List, "Item on the grocery list", "Milk, tissues, anything extra", onClick = onListItem)
-            AddChoice(MiseIcons.Camera, "Recipe from a photo", "Phase 2")
         }
     }
 }

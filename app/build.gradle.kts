@@ -2,6 +2,12 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.room)
+}
+
+// Room writes each database version's schema here; the migration test reads them.
+room {
+    schemaDirectory("$projectDir/schemas")
 }
 
 // CI injects these through the environment. Each has a safe default so a build without
@@ -76,6 +82,14 @@ android {
         abortOnError = false
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
+    sourceSets {
+        getByName("test").assets.srcDirs("$projectDir/schemas")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -89,6 +103,10 @@ dependencies {
     implementation(libs.room.runtime)
     ksp(libs.room.compiler)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.junit)
+    testImplementation(libs.room.testing)
 
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)

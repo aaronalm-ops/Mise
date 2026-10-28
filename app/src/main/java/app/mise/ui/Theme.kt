@@ -133,8 +133,16 @@ object Mise {
         @Composable get() = LocalMiseType.current
 }
 
+/** Light, dark, or following the phone (Settings, Display). */
 @Composable
-fun MiseTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun MiseTheme(
+    dark: Boolean = when (app.mise.data.Prefs.theme) {
+        app.mise.data.Prefs.Theme.LIGHT -> false
+        app.mise.data.Prefs.Theme.DARK -> true
+        app.mise.data.Prefs.Theme.SYSTEM -> isSystemInDarkTheme()
+    },
+    content: @Composable () -> Unit,
+) {
     val c = if (dark) DarkColours else LightColours
     val scheme = if (dark) {
         darkColorScheme(
