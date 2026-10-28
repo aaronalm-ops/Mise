@@ -1,7 +1,9 @@
 package app.mise.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -130,6 +132,7 @@ fun PlanScreen(
     onOpenPlanned: (PlanEntry) -> Unit,
     sheet: PlanSheet?,
     onSheet: (PlanSheet?) -> Unit,
+    onHousehold: () -> Unit = {},
 ) {
     val c = Mise.colours
     val repo = PlanRepo.get(LocalContext.current)
@@ -138,6 +141,7 @@ fun PlanScreen(
     val days = remember(weekStart) { (0..6).map { weekStart.plusDays(it.toLong()) } }
     val today = LocalDate.now()
     var repeat by remember { mutableStateOf(false) }
+    var suggest by remember { mutableStateOf(false) }
     val longPress = Haptic.rememberLongPress()
 
     Column(Modifier.fillMaxSize()) {
@@ -151,6 +155,26 @@ fun PlanScreen(
         WeekNav(weekStart, onWeek)
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)) {
             if (entries == null) return@LazyColumn
+            val openDays = days.count { d -> !d.isBefore(today) && list.none { it.date == d } && notes.none { it.date == d } }
+            if (openDays >= 3 && app.mise.data.Ai.available) {
+                item(key = "suggest") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp).background(c.surface, CardShape)
+                            .border(BorderStroke(1.dp, c.line), CardShape)
+                            .clickable(role = Role.Button) { suggest = true }
+                            .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(MiseIcons.Spark, contentDescription = null, tint = c.text, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("$openDays days to plan", style = Mise.type.bodyM, color = c.text)
+                            Text("Mise AI can suggest dishes from your recipes", style = Mise.type.bodyS, color = c.text2)
+                        }
+                        Icon(MiseIcons.Forward, contentDescription = null, tint = c.text2, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
             items(days, key = { it.toString() }) { d ->
                 val dayEntries = list.filter { it.date == d }.sortedWith(compareBy({ it.meal.ordinal }, { it.createdAt }))
                 val dayNotes = notes.filter { it.date == d }.sortedBy { it.meal.ordinal }
@@ -210,6 +234,7 @@ fun PlanScreen(
             }
             item(key = "repeat") {
                 Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.Center) {
+                    TextAction("Suggest dishes", { suggest = true })
                     TextAction("Repeat a past week", { repeat = true })
                 }
             }
@@ -234,6 +259,7 @@ fun PlanScreen(
         )
     }
     if (repeat) RepeatWeekSheet(weekStart, onDismiss = { repeat = false })
+    if (suggest) SuggestWeekSheet(weekStart, onDismiss = { suggest = false }, onHousehold = { suggest = false; onHousehold() })
 }
 
 private fun firstFreeMeal(d: LocalDate, entries: List<PlanEntry>, notes: List<PlanNote>): Meal {

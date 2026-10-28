@@ -29,11 +29,11 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The centre Add action (kept by Aaron, 26 Oct 2026). Panels v2 frame: task heading, reachable
- * Close, then the choices. Recipe from a photo joins these in Phase 2.
+ * Close, then the choices, including the two Mise AI recipe helpers.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> Unit, onPlanDish: () -> Unit) {
+fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> Unit, onPlanDish: () -> Unit, onPhoto: () -> Unit, onIdea: () -> Unit) {
     val c = Mise.colours
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -52,6 +52,8 @@ fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> U
             AddChoice(MiseIcons.Calendar, "Dish on the plan", "Pick a day and a recipe", onClick = onPlanDish)
             AddChoice(MiseIcons.Library, "New recipe", "Write it with servings and swaps", onClick = onNewRecipe)
             AddChoice(MiseIcons.List, "Item on the grocery list", "Milk, tissues, anything extra", onClick = onListItem)
+            AddChoice(MiseIcons.Camera, "Recipe from a photo", "Mise AI reads a page or a card", onClick = onPhoto)
+            AddChoice(MiseIcons.Spark, "Recipe from an idea", "Mise AI writes it for you", onClick = onIdea)
         }
     }
 }

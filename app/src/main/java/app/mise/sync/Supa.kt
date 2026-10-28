@@ -89,12 +89,12 @@ object Supa {
 
     // ---- HTTP ----
 
-    private fun call(method: String, path: String, body: String?, token: String?, prefer: String? = null): String {
+    private fun call(method: String, path: String, body: String?, token: String?, prefer: String? = null, readTimeout: Int = 20_000): String {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {
             c.requestMethod = method
             c.connectTimeout = 10_000
-            c.readTimeout = 20_000
+            c.readTimeout = readTimeout
             c.setRequestProperty("apikey", anon)
             c.setRequestProperty("Authorization", "Bearer " + (token ?: anon))
             c.setRequestProperty("Content-Type", "application/json")
@@ -160,13 +160,16 @@ object Supa {
         j.getString("access_token")
     }
 
-    private fun authed(method: String, path: String, body: String?, prefer: String? = null): String = try {
-        call(method, path, body, token(), prefer)
+    private fun authed(method: String, path: String, body: String?, prefer: String? = null, readTimeout: Int = 20_000): String = try {
+        call(method, path, body, token(), prefer, readTimeout)
     } catch (e: ServerError) {
         if (e.code != 401) throw e
         synchronized(tokenLock) { prefs.edit().remove("access").apply() }
-        call(method, path, body, token(), prefer)
+        call(method, path, body, token(), prefer, readTimeout)
     }
+
+    /** The AI helpers (supabase/functions/mise-ai). Reading photos can take half a minute. */
+    fun ai(body: JSONObject): JSONObject = JSONObject(authed("POST", "/functions/v1/mise-ai", body.toString(), readTimeout = 120_000))
 
     fun rpc(name: String, args: JSONObject = JSONObject()): String = authed("POST", "/rest/v1/rpc/$name", args.toString())
 

@@ -68,4 +68,6 @@ object MiseIcons {
     }
     val Share: ImageVector by lazy { icon("share", listOf("M12 4v11M8 8l4-4 4 4", "M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5")) }
     val Repeat: ImageVector by lazy { icon("repeat", listOf("M5 10a5 5 0 0 1 5-5h7M14 2l3 3-3 3", "M19 14a5 5 0 0 1-5 5H7M10 22l-3-3 3-3")) }
+    /** Mise AI: a four-point spark. */
+    val Spark: ImageVector by lazy { icon("spark", listOf("M12 3c.6 4.6 2.4 6.4 7 7-4.6.6-6.4 2.4-7 7-.6-4.6-2.4-6.4-7-7 4.6-.6 6.4-2.4 7-7Z", "M19 16v4M17 18h4")) }
 }

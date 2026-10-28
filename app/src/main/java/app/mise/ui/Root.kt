@@ -67,6 +67,7 @@ fun MiseRoot(open: String? = null, onOpened: () -> Unit = {}) {
     var stackText by rememberSaveable { mutableStateOf("") }
     var showAdd by rememberSaveable { mutableStateOf(false) }
     var showAddItem by rememberSaveable { mutableStateOf(false) }
+    var aiRecipe by rememberSaveable { mutableStateOf("") }
     var weekText by rememberSaveable(Prefs.weekStart) { mutableStateOf(defaultWeek(Prefs.weekStart).toString()) }
     var planSheet by remember { mutableStateOf<PlanSheet?>(null) }
     // Keeps each tab's scroll position and filters while another screen is on top.
@@ -110,6 +111,7 @@ fun MiseRoot(open: String? = null, onOpened: () -> Unit = {}) {
                         planSheet = planSheet, onPlanSheet = { planSheet = it },
                         onAdd = { showAdd = true },
                         onAddItem = { showAddItem = true },
+                        onHousehold = { setStack(listOf("settings", "household")) },
                     )
                 } else {
                     Stacked(
@@ -137,6 +139,8 @@ fun MiseRoot(open: String? = null, onOpened: () -> Unit = {}) {
                 onDismiss = { showAdd = false },
                 onNewRecipe = { showAdd = false; dest = Dest.Recipes; push("edit:new") },
                 onListItem = { showAdd = false; showAddItem = true },
+                onPhoto = { showAdd = false; aiRecipe = AiRecipeMode.Photo.name },
+                onIdea = { showAdd = false; aiRecipe = AiRecipeMode.Idea.name },
                 onPlanDish = {
                     showAdd = false
                     setStack(emptyList())
@@ -145,6 +149,14 @@ fun MiseRoot(open: String? = null, onOpened: () -> Unit = {}) {
                     val d = if (today in weekStart..weekStart.plusDays(6)) today else weekStart
                     planSheet = PlanSheet.Add(d, Meal.DINNER)
                 },
+            )
+        }
+        if (aiRecipe.isNotEmpty()) {
+            AiRecipeSheet(
+                mode = AiRecipeMode.valueOf(aiRecipe),
+                onDismiss = { aiRecipe = "" },
+                onDraft = { id -> aiRecipe = ""; dest = Dest.Recipes; setStack(listOf("draft:$id")) },
+                onHousehold = { aiRecipe = ""; setStack(listOf("settings", "household")) },
             )
         }
         if (showAddItem) {
@@ -165,6 +177,7 @@ private fun Tabs(
     onPlanSheet: (PlanSheet?) -> Unit,
     onAdd: () -> Unit,
     onAddItem: () -> Unit,
+    onHousehold: () -> Unit,
 ) {
     BackHandler(enabled = dest != Dest.Plan) { onDest(Dest.Plan) }
     Column(Modifier.fillMaxSize()) {
@@ -181,6 +194,7 @@ private fun Tabs(
                     onOpenPlanned = { e -> push("recipe:${e.recipe.id}?s=${e.servings}&c=${enc(Choices.encode(e.choices))}") },
                     sheet = planSheet,
                     onSheet = onPlanSheet,
+                    onHousehold = onHousehold,
                 )
                 Dest.Recipes -> RecipesScreen(
                     onSettings = openSettings,
