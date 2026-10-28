@@ -4,7 +4,7 @@
 //
 // Secrets (Supabase, Edge Functions, Secrets):
 //   NVIDIA_API_KEY      your key from build.nvidia.com (starts with nvapi-)
-//   MISE_AI_EMAILS      comma-separated emails allowed to use AI, e.g. you and Janice
+//   MISE_AI_EMAILS      comma-separated emails allowed to use AI (your household)
 //   MISE_MODEL          optional text model, default meta/llama-3.3-70b-instruct
 //   MISE_VISION_MODEL   optional photo model, default mistralai/ministral-14b-instruct-2512
 //
@@ -22,7 +22,7 @@ const CUISINES = ["Indian", "Goan", "Pakistani", "Indo-Chinese", "Chinese", "Tha
 const DISH_TYPES = ["Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew", "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad", "Breakfast", "Dessert and sweet bake", "Drink", "Sauce and dip"];
 const UNITS = ["g", "kg", "ml", "l", "tsp", "tbsp", "cup", "pc", "clove", "can", "pack", "bunch", "sprig", "pinch", "to taste"];
 
-const HOUSE = `You help a couple in the UAE (Aaron and Janice) with their recipe and meal-planning app, Mise.
+const HOUSE = `You help a household in the UAE with their recipe and meal-planning app, Mise.
 They cook Indian and Goan food most often, plus Italian, Indo-Chinese and quick weeknight dishes.
 Write in British English. Use metric amounts and only these units: ${UNITS.join(", ")}.
 Garlic is counted in cloves; onions, tomatoes and eggs in pc; herbs for garnish in bunch (0.25 bunch for a garnish), curry leaves in sprig.
@@ -170,7 +170,7 @@ Deno.serve(async (req) => {
             `Transcribe it faithfully into Mise's format: keep the author's amounts and steps, convert imperial to metric, ` +
             `and where an amount is missing, estimate a sensible one and add "est." to its note. ` +
             `If the photos do not show a recipe, return a title of "Not a recipe" and explain in notes.` +
-            (body.hint ? `\nAaron's note: ${String(body.hint).slice(0, 300)}` : ""),
+            (body.hint ? `\nThe cook's note: ${String(body.hint).slice(0, 300)}` : ""),
         }];
         images.forEach((i) => content.push({ type: "image_url", image_url: { url: `data:${i.media_type};base64,${i.data}` } }));
         return json({ recipe: await ask(HOUSE, content, RECIPE_TOOL, 4000, true) });

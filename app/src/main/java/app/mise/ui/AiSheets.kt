@@ -84,12 +84,13 @@ fun Thinking(text: String, sub: String = "Usually 10 to 30 seconds") {
     }
 }
 
-/** Shown when the AI helpers need the Mise account first. */
+/** Shown when the AI helpers need the Mise account first: sign in right here. */
 @Composable
-private fun NeedsAccount(onHousehold: () -> Unit) {
-    EmptyState("Sign in first", "The AI helpers run on your Mise account, so only you and Janice can use them. Sign in under Settings, Household.")
-    Spacer(Modifier.height(12.dp))
-    PrimaryButton("Open Household", onHousehold, Modifier.fillMaxWidth())
+private fun NeedsAccount(onSigned: () -> Unit) {
+    AccountFlow(
+        onDone = { h -> Toasts.show(welcomeLine(h)); onSigned() },
+        intro = "Mise AI works through your Mise account, so only people you allow can use it. Sign in with your email to start.",
+    )
 }
 
 enum class AiRecipeMode { Photo, Idea }
@@ -114,6 +115,7 @@ fun AiRecipeSheet(mode: AiRecipeMode, onDismiss: () -> Unit, onDraft: (Long) -> 
     var error by remember { mutableStateOf<String?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
     var pendingCamera by remember { mutableStateOf<Uri?>(null) }
+    var signed by remember { mutableStateOf(Ai.available) }
     val confirm = Haptic.rememberConfirm()
 
     fun addPhotos(list: List<Uri>) {
@@ -174,7 +176,7 @@ fun AiRecipeSheet(mode: AiRecipeMode, onDismiss: () -> Unit, onDraft: (Long) -> 
     ) {
         Column(Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState())) {
             when {
-                !Ai.available -> NeedsAccount(onHousehold)
+                !signed -> NeedsAccount { signed = true }
                 busy -> {
                     Thinking(if (mode == AiRecipeMode.Photo) "Reading the recipe" else "Writing your recipe")
                     GhostButton("Cancel", { job?.cancel(); busy = false }, Modifier.fillMaxWidth())
@@ -228,7 +230,7 @@ fun AiRecipeSheet(mode: AiRecipeMode, onDismiss: () -> Unit, onDraft: (Long) -> 
                 }
             }
             error?.let { Text(it, style = Mise.type.bodyS, color = c.danger, modifier = Modifier.padding(start = 4.dp, top = 12.dp)) }
-            if (!busy && Ai.available) {
+            if (!busy && signed) {
                 Text("The result opens as a draft marked To check. Nothing is saved until you tap Save.", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
             }
         }
@@ -256,6 +258,7 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
     var error by remember { mutableStateOf<String?>(null) }
     var ideas by remember { mutableStateOf<WeekIdeas?>(null) }
     var off by remember { mutableStateOf(setOf<Int>()) }
+    var signed by remember { mutableStateOf(Ai.available) }
     var job by remember { mutableStateOf<Job?>(null) }
     val confirm = Haptic.rememberConfirm()
 
@@ -287,7 +290,7 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
             val lib = library
             val result = ideas
             when {
-                !Ai.available -> NeedsAccount(onHousehold)
+                !signed -> NeedsAccount { signed = true }
                 lib != null && lib.size < 5 -> EmptyState("Add a few more recipes first", "Suggestions come from your own recipes, so there need to be at least five.")
                 busy -> {
                     Thinking("Looking through your ${lib?.size ?: 0} recipes")

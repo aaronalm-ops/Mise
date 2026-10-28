@@ -62,7 +62,7 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
         ) {
             SectionLabel("Sharing")
             Card {
-                NavRow("Household", syncLine() ?: "Share recipes, plan and list with Janice", onHousehold)
+                NavRow("Household", syncLine() ?: "Sign in to share recipes, plan and list with your household", onHousehold)
             }
 
             SectionLabel("Planning")

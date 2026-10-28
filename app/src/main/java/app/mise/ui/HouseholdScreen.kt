@@ -129,28 +129,22 @@ fun HouseholdScreen(onBack: () -> Unit) {
             }
             when {
                 !Supa.configured -> EmptyState("Sharing is not set up in this version", "This build has no server details. Install the latest release.")
-                !Supa.signedIn -> SignInPanel(
-                    busy,
-                    onSignIn = { email, pw, name ->
-                        act {
-                            Supa.setDisplayName(name)
-                            Supa.signIn(email, pw)
-                            val j = householdOf(Supa.rpc("mise_my_household"))
-                            if (j != null) {
-                                Supa.setHousehold(j)
-                                SyncEngine.joinAndMerge()
-                                info = "Welcome back. You are in ${j.optString("name", "your household")} again."
-                            }
+                !Supa.signedIn -> {
+                    Card {
+                        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            MiseStamp(72.dp)
+                            Spacer(Modifier.height(12.dp))
+                            Text("Cook together", style = Mise.type.displayS, color = c.text)
+                            Text(
+                                "One shared set of recipes, one plan and one live grocery list for your household.",
+                                style = Mise.type.bodyS, color = c.text2, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
                         }
-                    },
-                    onSignUp = { email, pw, name ->
-                        act {
-                            Supa.setDisplayName(name)
-                            val now = Supa.signUp(email, pw)
-                            if (!now) info = "Account created. Open the confirmation email on this phone and tap the link, then come back and sign in. If the page after the link shows an error, that is fine: the account is confirmed."
-                        }
-                    },
-                )
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    AccountFlow(onDone = { h -> info = welcomeLine(h); tick++ }, intro = "Sign in with your email. You get a 6-digit code: no password to remember.")
+                }
                 Supa.householdId == null -> JoinPanel(
                     busy,
                     onCreate = { name ->
@@ -186,7 +180,7 @@ fun HouseholdScreen(onBack: () -> Unit) {
                             Column(Modifier.padding(16.dp)) {
                                 val code = Supa.inviteCode ?: ""
                                 Text(spaced(code), style = Mise.type.number.copy(fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = 4.sp), color = c.text)
-                                Text("On the other phone: Settings, Household, sign in, then Join with this code.", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(top = 6.dp))
+                                Text("On the other phone: Settings, Household, sign in with email, then Join with this code.", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(top = 6.dp))
                                 Spacer(Modifier.height(12.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     GhostButton("Copy", { copy(ctx, code); Toasts.show("Code copied") })
@@ -245,66 +239,9 @@ private fun copy(ctx: Context, code: String) {
 }
 
 private fun share(ctx: Context, code: String) {
-    val text = "Join our kitchen in Mise: Settings, Household, sign in, then Join with code ${spaced(code)}"
+    val text = "Join our kitchen in Mise: open Settings, Household, sign in with your email, then Join with this code: ${spaced(code)}"
     val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, text) }
     ctx.startActivity(Intent.createChooser(send, "Share the code"))
-}
-
-@Composable
-private fun SignInPanel(busy: Boolean, onSignIn: (String, String, String) -> Unit, onSignUp: (String, String, String) -> Unit) {
-    val c = Mise.colours
-    var name by remember { mutableStateOf(Supa.displayName) }
-    var email by remember { mutableStateOf(Supa.email ?: "") }
-    var pw by remember { mutableStateOf("") }
-    Text("Share your recipes, plan and grocery list with your household. You both see the same list, live.", style = Mise.type.body, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp))
-    MiseField(name, { name = it }, "Your first name", Modifier.fillMaxWidth(), capitalization = KeyboardCapitalization.Words)
-    Spacer(Modifier.height(8.dp))
-    MiseField(email, { email = it.trim() }, "Email", Modifier.fillMaxWidth(), keyboardType = KeyboardType.Email, capitalization = KeyboardCapitalization.None)
-    Spacer(Modifier.height(8.dp))
-    PasswordField(pw) { pw = it }
-    Spacer(Modifier.height(16.dp))
-    val ok = !busy && name.isNotBlank() && email.contains('@') && pw.length >= 6
-    val why = when {
-        busy -> "Please wait"
-        name.isBlank() -> "Add your first name"
-        !email.contains('@') -> "Add your email"
-        pw.length < 6 -> "Password: 6 characters or more"
-        else -> "Sign in"
-    }
-    PrimaryButton(why, { onSignIn(email, pw, name) }, Modifier.fillMaxWidth(), enabled = ok)
-    Spacer(Modifier.height(8.dp))
-    GhostButton("Create an account", { if (ok) onSignUp(email, pw, name) }, Modifier.fillMaxWidth(), enabled = ok)
-}
-
-@Composable
-private fun PasswordField(value: String, onChange: (String) -> Unit) {
-    val c = Mise.colours
-    var show by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        BasicTextField(
-            value = value,
-            onValueChange = onChange,
-            singleLine = true,
-            textStyle = Mise.type.body.copy(color = c.text),
-            cursorBrush = SolidColor(c.text),
-            visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.weight(1f),
-            decorationBox = { inner ->
-                Box(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                        .background(c.surface, RoundedCornerShape(12.dp))
-                        .border(BorderStroke(1.dp, c.line), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    if (value.isEmpty()) Text("Password", style = Mise.type.body, color = c.text2)
-                    inner()
-                }
-            },
-        )
-        TextAction(if (show) "Hide" else "Show", { show = !show })
-    }
 }
 
 @Composable
@@ -312,12 +249,21 @@ private fun JoinPanel(busy: Boolean, onCreate: (String) -> Unit, onJoin: (String
     val c = Mise.colours
     var name by remember { mutableStateOf("Home") }
     var code by remember { mutableStateOf("") }
-    Text("Signed in as ${Supa.email ?: ""}", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
-    SectionLabel("Join the other phone's household")
-    MiseField(
-        code, { code = it.uppercase().filter { ch -> ch.isLetterOrDigit() }.take(10) }, "10-character code",
-        Modifier.fillMaxWidth(), capitalization = KeyboardCapitalization.Characters,
-    )
+    Text("Signed in as ${Supa.displayName.ifBlank { Supa.email ?: "" }}", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
+    SectionLabel("Join a household")
+    val ctx = LocalContext.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        MiseField(
+            code, { code = it.uppercase().filter { ch -> ch.isLetterOrDigit() }.take(10) }, "10-character code",
+            Modifier.weight(1f), capitalization = KeyboardCapitalization.Characters,
+        )
+        TextAction("Paste", {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val text = cm.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+            val found = Regex("[A-Z0-9]{5}\\s?[A-Z0-9]{5}").find(text.uppercase())?.value?.filter { it.isLetterOrDigit() }
+            if (found != null) code = found else Toasts.show("No code on the clipboard. Copy it from the other phone's message.")
+        })
+    }
     Spacer(Modifier.height(8.dp))
     PrimaryButton(
         if (busy) "Please wait" else if (code.length < 10) "Enter the code to join" else "Join household",

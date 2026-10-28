@@ -127,6 +127,11 @@ object Supa {
         msg.contains("Email not confirmed", true) -> "Please confirm your email first: open the link we sent, then sign in."
         msg.contains("already registered", true) -> "That email already has an account. Sign in instead."
         msg.contains("Password should be", true) -> "Choose a password of at least 6 characters."
+        msg.contains("expired", true) || msg.contains("invalid", true) && msg.contains("token", true) ->
+            "That code is wrong or has expired. Use the code in the newest email, or send a new one."
+        msg.contains("only request this after", true) || msg.contains("security purposes", true) -> "Wait a few seconds, then send a new code."
+        msg.contains("rate limit", true) -> "Too many sign-in emails just now. Try again later, or sign in with your password."
+        msg.contains("Signups not allowed", true) -> "New accounts are switched off on the server."
         else -> msg
     }
 
@@ -137,6 +142,19 @@ object Supa {
         val body = JSONObject().put("email", email.trim()).put("password", password).toString()
         saveSession(JSONObject(call("POST", "/auth/v1/token?grant_type=password", body, null)), gen)
         prefs.edit().putString("email", email.trim()).apply()
+    }
+
+    /** Emails a 6-digit sign-in code. Creates the account the first time; no password needed. */
+    fun sendCode(email: String) {
+        call("POST", "/auth/v1/otp", JSONObject().put("email", email.trim().lowercase()).put("create_user", true).toString(), null)
+    }
+
+    /** Signs in with the code from the email. */
+    fun verifyCode(email: String, code: String) {
+        val gen = generation
+        val body = JSONObject().put("type", "email").put("email", email.trim().lowercase()).put("token", code.filter(Char::isDigit)).toString()
+        saveSession(JSONObject(call("POST", "/auth/v1/verify", body, null)), gen)
+        prefs.edit().putString("email", email.trim().lowercase()).apply()
     }
 
     /** Returns true when signed in straight away, false when the email must be confirmed first. */

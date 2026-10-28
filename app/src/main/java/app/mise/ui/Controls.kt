@@ -78,6 +78,7 @@ fun MiseField(
     error: Boolean = false,
     textAlign: TextAlign = TextAlign.Start,
     compact: Boolean = false,
+    password: Boolean = false,
 ) {
     val c = Mise.colours
     var focused by remember { mutableStateOf(false) }
@@ -91,6 +92,7 @@ fun MiseField(
         cursorBrush = SolidColor(c.text),
         keyboardOptions = KeyboardOptions(capitalization = capitalization, keyboardType = keyboardType, imeAction = action),
         keyboardActions = if (onIme != null) KeyboardActions(onAny = { onIme() }) else KeyboardActions.Default,
+        visualTransformation = if (password) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         modifier = modifier
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused; onFocus?.invoke(it.isFocused) }
