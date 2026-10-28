@@ -30,7 +30,20 @@ data class ListItem(
     val line: GroceryLine? = null,
     /** The week the tick belongs to (earlier weeks for carried lines). */
     val weekStart: LocalDate,
+    /** Pantry level when kept at home: Pantry.LOW or Pantry.OUT puts it on the list. */
+    val pantry: Int = Pantry.NONE,
 )
+
+/** How much of a kept-at-home item is left. Stored in the ingredient's staple choice. */
+object Pantry {
+    const val NONE = 0
+    const val HAVE = 1
+    const val LOW = 2
+    const val OUT = 3
+}
+
+/** One item kept at home, for the Pantry tab. */
+data class PantryItem(val key: String, val name: String, val level: Int, val aisle: Aisle)
 
 /** Everything the list screen needs for one week, in one emission. */
 data class WeekList(
@@ -69,7 +82,15 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
     fun recentExtraNames(): Flow<List<String>> = dao.observeRecentExtraNames(12)
 
     /** Household settings per merged ingredient key: aisle, staple, and "Same as" merges. */
-    private data class KeySettings(val aisles: Map<String, Aisle>, val staples: Set<String>, val aliases: Map<String, String>)
+    private data class KeySettings(
+        val aisles: Map<String, Aisle>,
+        /** Kept at home and in stock: left off the list. */
+        val staples: Set<String>,
+        val aliases: Map<String, String>,
+        /** Kept at home but low or out: on the list, and restocked when ticked. */
+        val short: Map<String, Int>,
+        val names: Map<String, String>,
+    )
 
     private fun settings(ings: List<IngredientEntity>): KeySettings {
         val aliases = ings.filter { it.aliasOf.isNotBlank() }.associate { Names.keyOf(it.name) to it.aliasOf }
@@ -82,8 +103,10 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
             if (i.stapleChoice >= 0) choice[key] = i.stapleChoice
         }
         val keys = ings.map { k(it) }.toSet() + Names.defaultStaples
-        val staples = keys.filter { key -> choice[key]?.let { it == 1 } ?: (key in Names.defaultStaples) }.toSet()
-        return KeySettings(aisles, staples, aliases)
+        val staples = keys.filter { key -> choice[key]?.let { it == Pantry.HAVE } ?: (key in Names.defaultStaples) }.toSet()
+        val short = choice.filterValues { it == Pantry.LOW || it == Pantry.OUT }
+        val names = ings.groupBy { k(it) }.mapValues { (_, rows) -> rows.first().name }
+        return KeySettings(aisles, staples, aliases, short, names)
     }
 
     fun list(weekStart: LocalDate, until: LocalDate? = null): Flow<WeekList> {
@@ -111,7 +134,16 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
                 .filter { it.key !in thisWeekKeys && it.key !in s.staples }
                 .map { lineItem(it, prevCheckMap[it.key], s, prev).copy(carried = true, id = "prev:${it.key}") }
                 .filter { !it.checked }
-            WeekList(dishes = shown.count { !it.leftovers }, items = items, lastWeek = lastWeek)
+            // Pantry items running low or out that no dish needs this week: restock lines.
+            val restock = s.short.filterKeys { it !in thisWeekKeys }.map { (key, level) ->
+                val name = s.names[key] ?: key.replaceFirstChar { it.uppercase() }
+                ListItem(
+                    id = "pantry:$key", key = key, name = name, amount = "", detail = null, dishes = emptyList(),
+                    aisle = s.aisles[key] ?: Aisle.guess(name), checked = false, checkedBy = "", staple = false,
+                    weekStart = weekStart, pantry = level,
+                )
+            }
+            WeekList(dishes = shown.count { !it.leftovers }, items = items + restock, lastWeek = lastWeek)
         }
     }
 
@@ -127,6 +159,7 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
             id = "ing:${line.key}", key = line.key, name = line.name, amount = line.amount, detail = line.detail,
             dishes = line.dishes, aisle = s.aisles[line.key] ?: Aisle.guess(line.name), checked = checked,
             checkedBy = check?.checkedBy ?: "", staple = line.key in s.staples, more = more, line = line, weekStart = week,
+            pantry = s.short[line.key] ?: Pantry.NONE,
         )
     }
 
@@ -222,6 +255,11 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
 
     suspend fun setChecked(item: ListItem, checked: Boolean, by: String) = tx {
         val week = item.weekStart.toString()
+        // Bought: a pantry item that was low or out is back in stock (Undo puts the level back).
+        if (item.pantry != Pantry.NONE) {
+            setLevelIn(item.key, item.name, if (checked) Pantry.HAVE else item.pantry)
+            if (item.id.startsWith("pantry:")) return@tx
+        }
         if (item.extraId != null) {
             dao.extra(item.extraId)?.let {
                 dao.updateExtra(it.copy(checked = checked, checkedBy = if (checked) by else ""))
@@ -276,8 +314,13 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
         rowsFor(key, name).forEach { dao.setAisle(it.id, aisle.key); MiseDb.mark(db, "ingredient", it.nameKey) }
     }
 
-    suspend fun setStaple(key: String, name: String, staple: Boolean) = tx {
-        rowsFor(key, name).forEach { dao.setStapleChoice(it.id, if (staple) 1 else 0); MiseDb.mark(db, "ingredient", it.nameKey) }
+    suspend fun setStaple(key: String, name: String, staple: Boolean) = setLevel(key, name, if (staple) Pantry.HAVE else Pantry.NONE)
+
+    /** Have, low, out, or not kept at home (Pantry.NONE). */
+    suspend fun setLevel(key: String, name: String, level: Int) = tx { setLevelIn(key, name, level) }
+
+    private suspend fun setLevelIn(key: String, name: String, level: Int) {
+        rowsFor(key, name).forEach { dao.setStapleChoice(it.id, level); MiseDb.mark(db, "ingredient", it.nameKey) }
     }
 
     /** "Same as...": merges [fromKey] into [toKey] on the list from now on. */
@@ -285,13 +328,19 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
         rowsFor(fromKey, fromName).forEach { dao.setAlias(it.id, toKey); MiseDb.mark(db, "ingredient", it.nameKey) }
     }
 
-    /** All staples and their state, for the Pantry tab. */
-    fun staples(): Flow<List<Pair<String, Boolean>>> = dao.observeIngredients().map { ings ->
+    /** Everything kept at home and how much is left, for the Pantry tab. */
+    fun pantry(): Flow<List<PantryItem>> = dao.observeIngredients().map { ings ->
         val s = settings(ings)
-        ings.groupBy { Names.keyOf(it.name) }
-            .filter { (key, rows) -> key in s.staples || rows.any { it.stapleChoice >= 0 } }
-            .map { (key, rows) -> rows.first().name to (key in s.staples) }
-            .sortedBy { it.first.lowercase() }
+        ings.groupBy { Names.keyOf(it.name).let { k -> s.aliases[k] ?: k } }
+            .mapNotNull { (key, rows) ->
+                val level = when {
+                    key in s.staples -> Pantry.HAVE
+                    else -> s.short[key] ?: return@mapNotNull null
+                }
+                val name = rows.first().name
+                PantryItem(key, name, level, s.aisles[key] ?: Aisle.guess(name))
+            }
+            .sortedBy { it.name.lowercase() }
     }
 
     companion object {

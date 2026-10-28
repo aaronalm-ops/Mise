@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.mise.data.Aisle
 import app.mise.data.ListItem
+import app.mise.data.Pantry
 import app.mise.data.PlanRepo
 import app.mise.data.Prefs
 import app.mise.sync.Supa
@@ -111,7 +112,7 @@ fun ListScreen(weekStart: LocalDate, onWeek: (LocalDate) -> Unit, onSettings: ()
                 delay(1400)
                 lingering = lingering - item.id
             }
-            Toasts.undo("${item.name} in the basket") { repo.scope.launch { repo.setChecked(item.copy(checked = true), false, by) } }
+            Toasts.undo(if (item.pantry != Pantry.NONE) "${item.name} restocked in the Pantry" else "${item.name} in the basket") { repo.scope.launch { repo.setChecked(item.copy(checked = true), false, by) } }
         }
     }
 
@@ -293,6 +294,8 @@ private fun ListRow(item: ListItem, first: Boolean, last: Boolean, modifier: Mod
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
                 val meta = buildList {
+                    if (item.pantry == Pantry.LOW) add("Running low at home")
+                    if (item.pantry == Pantry.OUT) add("Out at home")
                     item.more?.let { add(it) }
                     if (item.extraId != null) add("Added")
                     if (item.carried) add("From last week")
@@ -358,17 +361,24 @@ private fun ItemOptionsSheet(item: ListItem, all: List<ListItem>, onDismiss: () 
             }
             if (item.extraId == null) {
                 Spacer(Modifier.height(8.dp))
-                MiseSwitch(
-                    item.staple,
-                    { on ->
-                        repo.scope.launch { repo.setStaple(item.key, item.name, on) }
-                        Toasts.show(if (on) "${item.name} is a staple: kept under Usually at home" else "${item.name} goes on the list from now on")
-                        onDismiss()
-                    },
-                    "Usually at home",
-                    sub = "Staples stay off the list until you need them",
-                    inset = 4.dp,
-                )
+                SectionLabel("At home", "Pantry")
+                val level = if (item.staple) Pantry.HAVE else item.pantry
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(Pantry.HAVE to "Have it", Pantry.LOW to "Running low", Pantry.OUT to "Out", Pantry.NONE to "Not kept").forEach { (lv, label) ->
+                        MiseChip(label, lv == level) {
+                            repo.scope.launch { repo.setLevel(item.key, item.name, lv) }
+                            Toasts.show(
+                                when (lv) {
+                                    Pantry.HAVE -> "${item.name} is in the Pantry: kept under Usually at home"
+                                    Pantry.LOW -> "${item.name} is running low: it stays on the list until bought"
+                                    Pantry.OUT -> "${item.name} is out: it stays on the list until bought"
+                                    else -> "${item.name} goes on the list whenever a dish needs it"
+                                },
+                            )
+                            onDismiss()
+                        }
+                    }
+                }
                 val others = all.filter { it.extraId == null && it.key != item.key }.distinctBy { it.key }.sortedBy { it.name.lowercase() }
                 if (others.isNotEmpty()) {
                     AddRow(if (sameAs) "Same as… (choose the item it matches)" else "Same as…", onClick = { sameAs = !sameAs })
