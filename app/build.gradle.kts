@@ -87,7 +87,8 @@ android {
     }
 
     sourceSets {
-        getByName("test").assets.srcDirs("$projectDir/schemas")
+        // Robolectric reads the debug assets, so the migration test finds the saved schemas there.
+        getByName("debug").assets.srcDirs("$projectDir/schemas")
     }
 
     packaging {
