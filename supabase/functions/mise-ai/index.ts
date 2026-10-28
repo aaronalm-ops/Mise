@@ -1,17 +1,19 @@
-// Mise AI helpers: one Supabase Edge Function between the app and Claude.
-// The Anthropic key lives here as a secret, never in the app. Only signed-in accounts whose
-// email is listed in MISE_AI_EMAILS can use it, so nobody else can spend the credits.
+// Mise AI helpers: one Supabase Edge Function between the app and NVIDIA's hosted models
+// (build.nvidia.com, OpenAI-style chat API). The NVIDIA key lives here as a secret, never in
+// the app. Only signed-in accounts whose email is listed in MISE_AI_EMAILS can use it.
 //
 // Secrets (Supabase, Edge Functions, Secrets):
-//   ANTHROPIC_API_KEY  your Claude API key
-//   MISE_AI_EMAILS     comma-separated emails allowed to use AI, e.g. you and Janice
-//   MISE_MODEL         optional, defaults to claude-sonnet-5-5
+//   NVIDIA_API_KEY      your key from build.nvidia.com (starts with nvapi-)
+//   MISE_AI_EMAILS      comma-separated emails allowed to use AI, e.g. you and Janice
+//   MISE_MODEL          optional text model, default meta/llama-3.3-70b-instruct
+//   MISE_VISION_MODEL   optional photo model, default mistralai/ministral-14b-instruct-2512
 //
 // Tasks: "photo" (photos of a recipe -> recipe), "idea" (a request -> recipe),
 // "week" (the library and the week -> suggested dishes).
 
-const MODEL = Deno.env.get("MISE_MODEL") ?? "claude-sonnet-5-5";
-const KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+const MODEL = Deno.env.get("MISE_MODEL") ?? "meta/llama-3.3-70b-instruct";
+const VISION_MODEL = Deno.env.get("MISE_VISION_MODEL") ?? "mistralai/ministral-14b-instruct-2512";
+const KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
 const ALLOWED = (Deno.env.get("MISE_AI_EMAILS") ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const ANON = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -106,29 +108,45 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-async function claude(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      system,
-      tools: [tool],
-      tool_choice: { type: "tool", name: tool.name },
-      messages: [{ role: "user", content }],
-    }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data?.error?.message ?? `Claude error ${r.status}`);
-  const use = (data.content ?? []).find((c: { type: string }) => c.type === "tool_use");
-  if (!use) throw new Error("No answer came back. Try again.");
-  return use.input;
+/** Pulls the JSON object out of a model reply (drops thinking, code fences and chatter). */
+function extract(text: string): unknown {
+  const t = text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/```(?:json)?/g, "");
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a < 0 || b <= a) throw new Error("no json");
+  return JSON.parse(t.slice(a, b + 1));
+}
+
+/**
+ * Asks the model for one JSON object matching the tool's schema. Retries once if the reply is
+ * not valid JSON.
+ */
+async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000, vision = false) {
+  const instruction = `Reply with one JSON object only, no other text, matching this JSON schema:\n${JSON.stringify(tool.input_schema)}`;
+  const messages: unknown[] = [
+    { role: "system", content: `${system}\n\n${tool.description}\n${instruction}` },
+    { role: "user", content },
+  ];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: vision ? VISION_MODEL : MODEL, messages, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.detail ?? data?.error?.message ?? data?.title ?? `NVIDIA error ${r.status}`);
+    const text = String(data?.choices?.[0]?.message?.content ?? "");
+    try {
+      return extract(text);
+    } catch {
+      messages.push({ role: "assistant", content: text }, { role: "user", content: "That was not valid JSON. Reply again with the JSON object only." });
+    }
+  }
+  throw new Error("The AI's answer could not be read. Try again.");
 }
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Use POST" }, 405);
-  if (!KEY) return json({ error: "AI is not set up yet: the ANTHROPIC_API_KEY secret is missing." }, 500);
+  if (!KEY) return json({ error: "AI is not set up yet: the NVIDIA_API_KEY secret is missing." }, 500);
 
   // Who is asking: the signed-in Mise account.
   const auth = req.headers.get("Authorization") ?? "";
@@ -146,16 +164,16 @@ Deno.serve(async (req) => {
       case "photo": {
         const images = (body.images as { media_type: string; data: string }[] | undefined) ?? [];
         if (images.length === 0 || images.length > 4) return json({ error: "Send one to four photos." }, 400);
-        const content: unknown[] = images.map((i) => ({ type: "image", source: { type: "base64", media_type: i.media_type, data: i.data } }));
-        content.push({
+        const content: unknown[] = [{
           type: "text",
           text: `These photos show one recipe (a cookbook page, a handwritten card, a screenshot or a packet). ` +
             `Transcribe it faithfully into Mise's format: keep the author's amounts and steps, convert imperial to metric, ` +
             `and where an amount is missing, estimate a sensible one and add "est." to its note. ` +
             `If the photos do not show a recipe, return a title of "Not a recipe" and explain in notes.` +
             (body.hint ? `\nAaron's note: ${String(body.hint).slice(0, 300)}` : ""),
-        });
-        return json({ recipe: await claude(HOUSE, content, RECIPE_TOOL) });
+        }];
+        images.forEach((i) => content.push({ type: "image_url", image_url: { url: `data:${i.media_type};base64,${i.data}` } }));
+        return json({ recipe: await ask(HOUSE, content, RECIPE_TOOL, 4000, true) });
       }
       case "idea": {
         const ask = String(body.prompt ?? "").slice(0, 600);
@@ -164,7 +182,7 @@ Deno.serve(async (req) => {
         const text = `Write one reliable, home-cookable recipe for ${serves} servings for this request: "${ask}". ` +
           `Use ingredients easy to buy in UAE supermarkets (Lulu, Carrefour, Spinneys). Give exact amounts. ` +
           `Mention in notes any shortcut or swap worth knowing.`;
-        return json({ recipe: await claude(HOUSE, [{ type: "text", text }], RECIPE_TOOL) });
+        return json({ recipe: await ask(HOUSE, [{ type: "text", text }], RECIPE_TOOL) });
       }
       case "week": {
         const library = (body.library as unknown[]) ?? [];
@@ -176,7 +194,7 @@ Deno.serve(async (req) => {
           `Rules: vary dish types and cuisines across the week; do not repeat a dish; prefer dishes not had for a while; ` +
           `quick dishes on busy weekdays, bigger cooks at the weekend; a curry pairs with a rice or bread already in the library only if it makes sense. ` +
           `Use only ids from the library and only the given slots.`;
-        return json(await claude(HOUSE, [{ type: "text", text }], WEEK_TOOL, 2500));
+        return json(await ask(HOUSE, [{ type: "text", text }], WEEK_TOOL, 2500));
       }
       default:
         return json({ error: "Unknown task" }, 400);
