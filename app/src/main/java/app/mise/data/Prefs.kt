@@ -38,9 +38,9 @@ object Prefs {
         listHintSeen = sp.getBoolean("listHintSeen", false)
     }
 
-    fun setTheme(t: Theme) { theme = t; sp.edit().putString("theme", t.name).apply() }
-    fun setDefaultServings(n: Int) { defaultServings = n; sp.edit().putInt("defaultServings", n).apply() }
-    fun setWeekStart(d: DayOfWeek) { weekStart = d; sp.edit().putInt("weekStart", d.value).apply() }
+    fun chooseTheme(t: Theme) { theme = t; sp.edit().putString("theme", t.name).apply() }
+    fun chooseDefaultServings(n: Int) { defaultServings = n; sp.edit().putInt("defaultServings", n).apply() }
+    fun chooseWeekStart(d: DayOfWeek) { weekStart = d; sp.edit().putInt("weekStart", d.value).apply() }
     fun setReminder(on: Boolean, day: DayOfWeek = reminderDay, hour: Int = reminderHour) {
         reminderOn = on; reminderDay = day; reminderHour = hour
         sp.edit().putBoolean("reminderOn", on).putInt("reminderDay", day.value).putInt("reminderHour", hour).apply()

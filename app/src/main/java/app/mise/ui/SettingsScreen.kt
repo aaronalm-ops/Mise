@@ -73,7 +73,7 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
                         Text(if (Prefs.defaultServings == 0) "Each recipe's own" else "New dishes start at this", style = Mise.type.bodyS, color = c.text2)
                     }
                     Stepper(
-                        Prefs.defaultServings, { Prefs.setDefaultServings(it) }, min = 0, max = 12, label = "servings",
+                        Prefs.defaultServings, { Prefs.chooseDefaultServings(it) }, min = 0, max = 12, label = "servings",
                         display = if (Prefs.defaultServings == 0) "–" else Prefs.defaultServings.toString(),
                     )
                 }
@@ -82,7 +82,7 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
                     Text("Week starts on", style = Mise.type.body, color = c.text, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
                     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(DayOfWeek.MONDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY).forEach { d ->
-                            MiseChip(d.getDisplayName(TextStyle.FULL, Locale.UK), Prefs.weekStart == d) { Prefs.setWeekStart(d) }
+                            MiseChip(d.getDisplayName(TextStyle.FULL, Locale.UK), Prefs.weekStart == d) { Prefs.chooseWeekStart(d) }
                         }
                     }
                 }
@@ -97,9 +97,9 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
             SectionLabel("Display")
             Card {
                 Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MiseChip("Phone", Prefs.theme == Prefs.Theme.SYSTEM) { Prefs.setTheme(Prefs.Theme.SYSTEM) }
-                    MiseChip("Light", Prefs.theme == Prefs.Theme.LIGHT) { Prefs.setTheme(Prefs.Theme.LIGHT) }
-                    MiseChip("Dark", Prefs.theme == Prefs.Theme.DARK) { Prefs.setTheme(Prefs.Theme.DARK) }
+                    MiseChip("Phone", Prefs.theme == Prefs.Theme.SYSTEM) { Prefs.chooseTheme(Prefs.Theme.SYSTEM) }
+                    MiseChip("Light", Prefs.theme == Prefs.Theme.LIGHT) { Prefs.chooseTheme(Prefs.Theme.LIGHT) }
+                    MiseChip("Dark", Prefs.theme == Prefs.Theme.DARK) { Prefs.chooseTheme(Prefs.Theme.DARK) }
                 }
             }
 

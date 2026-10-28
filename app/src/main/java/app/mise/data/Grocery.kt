@@ -71,7 +71,7 @@ enum class Aisle(val key: String, val label: String) {
             fun put(a: Aisle, vararg w: String) = w.forEach { this[it] = a }
             put(HERBS, "coriander", "coriander leaves", "cilantro", "mint", "mint leaves", "parsley", "basil", "thai basil", "curry leaf", "dill", "thyme", "rosemary", "spring onion", "green onion", "lemongrass", "galangal")
             put(MEAT, "chicken", "chicken thigh", "chicken wing", "mutton", "lamb", "beef", "minced meat", "mince", "kheema", "meatball", "patty", "beef patty", "turkey", "prawn", "shrimp", "fish", "kingfish", "salmon", "tuna steak", "crab", "squid", "corned beef", "sausage")
-            put(PORK, "bacon", "pancetta", "guanciale", "pork", "ham", "salami", "pepperoni", "chorizo")
+            put(PORK, "bacon", "pancetta", "guanciale", "pork", "ham", "salami", "pepperoni", "chorizo", "pork sausage", "pork mince", "pork chop", "pork belly")
             put(DAIRY, "egg", "egg yolk", "egg white", "milk", "yoghurt", "yogurt", "curd", "cheese", "cheddar", "mozzarella", "parmesan", "paneer", "butter", "cream", "sour cream", "heavy cream", "cooking cream", "ghee", "labneh", "laban", "buttermilk", "cheese slice")
             put(BAKERY, "bread", "bun", "burger bun", "pav", "roti", "naan", "tortilla", "pita", "croissant", "pizza bread", "bread crumb")
             put(DRY, "rice", "basmati", "dal", "lentil", "chickpea", "chana", "rajma", "bean", "kidney bean", "flour", "atta", "maida", "rava", "semolina", "oat", "pasta", "spaghetti", "penne", "macaroni", "tortellini", "noodle", "hakka noodle", "maggi noodle", "poha", "quinoa", "cashew", "almond", "peanut", "cornflake", "corn flour", "corn starch", "sugar", "brown sugar", "jaggery")

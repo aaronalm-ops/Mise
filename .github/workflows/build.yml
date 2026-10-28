@@ -83,7 +83,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          { grep -E "^e: |^w: .*error|error:|FAILED|What went wrong|> Task .* FAILED|Exception|expected:<" -A2 build.log || true; echo "-----"; tail -60 build.log; } \
+          { grep -E "^e: " build.log | sed 's#^e: file:///home/runner/work/Mise/Mise/app/src/##' | sort -u | head -160 || true; echo "-----"; grep -E "error:|FAILED|What went wrong|Exception|expected:<" -A2 build.log | head -60 || true; echo "-----"; tail -30 build.log; } \
             | head -250 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}' > summary.txt
           echo "::error title=Build failure::$(cat summary.txt)"
 

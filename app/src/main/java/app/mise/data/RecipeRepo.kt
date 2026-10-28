@@ -139,7 +139,8 @@ class RecipeRepo private constructor(private val db: MiseDb) {
      * matched by title (or by an older title listed in "replaces"). New ones are added. A match
      * from the same source that is still To check (never reviewed) is replaced with the new
      * version; anything you have reviewed or edited is left alone. One unreadable recipe does
-     * not stop the rest. Importing the same file twice is safe.
+     * not stop the rest. Titles listed under "retire" (merged duplicates) are removed if never
+ * reviewed. Importing the same file twice is safe.
      */
     fun importFile(json: String) {
         if (_importing.value) return
@@ -152,7 +153,14 @@ class RecipeRepo private constructor(private val db: MiseDb) {
                 val source = root.optString("source", "import").lowercase()
                 val existing = dao.titleRows().associateBy { it.title.trim().lowercase() }
                 val seen = mutableSetOf<String>()
-                var added = 0; var updated = 0; var skipped = 0; var failed = 0
+                var added = 0; var updated = 0; var skipped = 0; var failed = 0; var retired = 0
+                // Titles the file retires (merged into another recipe): removed only if never reviewed.
+                root.optJSONArray("retire")?.let { a ->
+                    for (k in 0 until a.length()) {
+                        val old = existing[a.getString(k).trim().lowercase()]
+                        if (old != null && old.source == source && old.status == RecipeStatus.TO_CHECK) { delete(old.id); retired++ }
+                    }
+                }
                 for (i in 0 until list.length()) {
                     try {
                         val obj = list.getJSONObject(i)
@@ -176,6 +184,7 @@ class RecipeRepo private constructor(private val db: MiseDb) {
                     if (added > 0) add(if (added == 1) "1 recipe added" else "$added recipes added")
                     if (updated > 0) add("$updated updated")
                     if (skipped > 0) add("$skipped already in Mise and kept as they are")
+                    if (retired > 0) add(if (retired == 1) "1 duplicate removed" else "$retired duplicates removed")
                     if (failed > 0) add("$failed could not be read")
                     if (isEmpty()) add("Nothing new in this file")
                 }.joinToString(", ") + "."
