@@ -13,3 +13,6 @@ captures/
 .cxx/
 *.apk
 *.aab
+
+# Private: signing key, passwords and recipe data. Never committed.
+/private/
