@@ -132,6 +132,8 @@ object Supa {
         msg.contains("only request this after", true) || msg.contains("security purposes", true) -> "Wait a few seconds, then send a new code."
         msg.contains("rate limit", true) -> "Too many sign-in emails just now. Try again later, or sign in with your password."
         msg.contains("Signups not allowed", true) -> "New accounts are switched off on the server."
+        msg.contains("Could not find the function", true) || msg.contains("schema cache", true) ->
+            "The sharing server is not set up yet. Run supabase/mise-setup.sql in the Supabase SQL Editor, then try again."
         else -> msg
     }
 

@@ -186,3 +186,6 @@ revoke execute on function mise_new_code(), mise_is_member(uuid), mise_household
   mise_leave_household() from public, anon;
 grant execute on function mise_create_household(text, text), mise_join_household(text, text),
   mise_my_household(), mise_leave_household(), mise_is_member(uuid) to authenticated;
+
+-- Tell the API about the new functions straight away (otherwise it can take a minute).
+notify pgrst, 'reload schema';
