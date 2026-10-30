@@ -5,14 +5,29 @@
 // Secrets (Supabase, Edge Functions, Secrets):
 //   NVIDIA_API_KEY      your key from build.nvidia.com (starts with nvapi-)
 //   MISE_AI_EMAILS      comma-separated emails allowed to use AI (your household)
-//   MISE_MODEL          optional text model, default meta/llama-3.3-70b-instruct
-//   MISE_VISION_MODEL   optional photo model, default mistralai/ministral-14b-instruct-2512
+//   MISE_MODEL          optional: force one text model (otherwise the best available is picked)
+//   MISE_VISION_MODEL   optional: force one photo model (otherwise the best available is picked)
+//
+// NVIDIA retires models often, so no model is hard-wired: each run reads the live catalogue and
+// uses the first available model from the preference lists below, skipping any that fail.
 //
 // Tasks: "photo" (photos of a recipe -> recipe), "idea" (a request -> recipe),
 // "week" (the library and the week -> suggested dishes).
 
-const MODEL = Deno.env.get("MISE_MODEL") ?? "meta/llama-3.3-70b-instruct";
-const VISION_MODEL = Deno.env.get("MISE_VISION_MODEL") ?? "mistralai/ministral-14b-instruct-2512";
+// Strongest first. Text: recipe writing, JSON and planning. Vision: reading recipe photos.
+const TEXT_PREFS = [
+  Deno.env.get("MISE_MODEL") ?? "",
+  "deepseek-ai/deepseek-v4-flash", "zhipuai/glm-5.1", "moonshotai/kimi-k2.5", "deepseek-ai/deepseek-v4-pro",
+  "qwen/qwen3.5-397b-a17b", "openai/gpt-oss-120b", "nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-super-120b",
+  "mistralai/mistral-large-3-675b-instruct-2512",
+].filter(Boolean);
+const VISION_PREFS = [
+  Deno.env.get("MISE_VISION_MODEL") ?? "",
+  "qwen/qwen3.5-397b-a17b", "moonshotai/kimi-k2.5", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "nvidia/nemotron-3-nano-omni",
+  "mistralai/mistral-large-3-675b-instruct-2512", "mistralai/ministral-14b-instruct-2512", "meta/llama-4-maverick-17b-128e-instruct",
+].filter(Boolean);
+// Any other catalogue model whose name says it reads images.
+const VISION_HINT = /(vl|vision|omni|maverick|scout|ministral|gemma-3|pixtral|kimi-k2\.5)/i;
 const KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
 const ALLOWED = (Deno.env.get("MISE_AI_EMAILS") ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -120,28 +135,66 @@ function extract(text: string): unknown {
  * Asks the model for one JSON object matching the tool's schema. Retries once if the reply is
  * not valid JSON.
  */
+let catalogue: string[] | null = null;
+async function available(): Promise<string[]> {
+  if (catalogue) return catalogue;
+  try {
+    const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` } });
+    const d = await r.json();
+    catalogue = (d?.data ?? []).map((m: { id: string }) => m.id);
+  } catch {
+    catalogue = [];
+  }
+  return catalogue!;
+}
+
+/** The models to try, in order: preferred ones that exist, then (for photos) any image reader. */
+async function candidates(vision: boolean): Promise<string[]> {
+  const live = await available();
+  const prefs = vision ? VISION_PREFS : TEXT_PREFS;
+  if (live.length === 0) return prefs;
+  const picked = prefs.filter((m) => live.includes(m));
+  if (vision) picked.push(...live.filter((m) => VISION_HINT.test(m) && !picked.includes(m)));
+  return picked.length ? picked : prefs;
+}
+
+const retired = new Set<string>();
+
 async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000, vision = false) {
   const instruction = `Reply with one JSON object only, no other text, matching this JSON schema:\n${JSON.stringify(tool.input_schema)}`;
   const messages: unknown[] = [
     { role: "system", content: `${system}\n\n${tool.description}\n${instruction}` },
     { role: "user", content },
   ];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ model: vision ? VISION_MODEL : MODEL, messages, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.detail ?? data?.error?.message ?? data?.title ?? `NVIDIA error ${r.status}`);
-    const text = String(data?.choices?.[0]?.message?.content ?? "");
-    try {
-      return extract(text);
-    } catch {
-      messages.push({ role: "assistant", content: text }, { role: "user", content: "That was not valid JSON. Reply again with the JSON object only." });
+  let lastError = "No AI model is available right now. Try again later.";
+  const models = (await candidates(vision)).filter((m) => !retired.has(m)).slice(0, 4);
+  for (const model of models) {
+    const convo = [...messages];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages: convo, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        lastError = String(data?.detail ?? data?.error?.message ?? data?.title ?? `NVIDIA error ${r.status}`);
+        // Retired, missing or unable to read images: move on to the next model.
+        if (r.status === 404 || r.status === 410 || r.status === 400 || /end of life|not found|no longer|not support/i.test(lastError)) retired.add(model);
+        if (r.status === 401 || r.status === 403) throw new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret.");
+        if (r.status === 429) throw new Error("NVIDIA's free limit was reached for now. Try again in a minute.");
+        break;
+      }
+      const text = String(data?.choices?.[0]?.message?.content ?? "");
+      try {
+        return extract(text);
+      } catch {
+        lastError = "The AI's answer could not be read. Try again.";
+        convo.push({ role: "assistant", content: text }, { role: "user", content: "That was not valid JSON. Reply again with the JSON object only." });
+      }
     }
   }
-  throw new Error("The AI's answer could not be read. Try again.");
+  throw new Error(lastError);
 }
 
 Deno.serve(async (req) => {
