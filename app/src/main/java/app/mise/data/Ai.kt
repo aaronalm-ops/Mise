@@ -23,7 +23,7 @@ data class WeekIdeas(val items: List<Suggestion>, val summary: String)
 
 /**
  * The AI helpers. Everything goes through Mise's own server function (supabase/functions/mise-ai),
- * which holds the Claude key; the phone only sends the photos or request and the signed-in token.
+ * which holds the NVIDIA key; the phone only sends the photos or request and the signed-in token.
  * Each result is a draft you review: nothing is saved or planned without your tap.
  */
 object Ai {
@@ -88,23 +88,40 @@ object Ai {
         return EditorState.fromJson(r.toString())
     }
 
-    /** Shrinks a photo to at most 1568 px on the long side (what the model reads best), as JPEG. */
+    /**
+     * Shrinks a photo to about 1280 px on the long side and under 170 KB as JPEG, the size
+     * NVIDIA's hosted models accept inline, stepping quality and size down until it fits.
+     */
     private fun encode(ctx: Context, uri: Uri): String {
         val src = ImageDecoder.createSource(ctx.contentResolver, uri)
-        val bmp = ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
+        var bmp = ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             val w = info.size.width; val h = info.size.height
-            val scale = 1568.0 / max(w, h)
+            val scale = 1280.0 / max(w, h)
             if (scale < 1) decoder.setTargetSize((w * scale).toInt().coerceAtLeast(1), (h * scale).toInt().coerceAtLeast(1))
         }
-        val out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        var bytes: ByteArray
+        var quality = 82
+        while (true) {
+            val out = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            bytes = out.toByteArray()
+            if (bytes.size <= 170_000 || (quality <= 46 && max(bmp.width, bmp.height) <= 720)) break
+            if (quality > 55) {
+                quality -= 12
+            } else {
+                val smaller = Bitmap.createScaledBitmap(bmp, (bmp.width * 0.8).toInt().coerceAtLeast(1), (bmp.height * 0.8).toInt().coerceAtLeast(1), true)
+                bmp.recycle(); bmp = smaller
+            }
+        }
         bmp.recycle()
-        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        return Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
 
     /** What to tell the person when a helper fails. */
     fun friendly(e: Throwable): String = when {
+        e is java.net.SocketTimeoutException -> "The AI took too long to answer. Try again; the next try often comes back faster."
+        e is java.net.UnknownHostException || e is java.net.ConnectException -> "No connection. Try again when you are online."
         e is IOException && e !is java.io.FileNotFoundException -> "No connection, or the answer took too long. Try again in a moment."
         e is ServerError && e.code == 404 -> "The AI helper is not switched on yet: its server function is missing."
         e is ServerError && e.code == 401 -> "Please sign in again (Settings, Household)."

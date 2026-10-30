@@ -139,7 +139,7 @@ let catalogue: string[] | null = null;
 async function available(): Promise<string[]> {
   if (catalogue) return catalogue;
   try {
-    const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` } });
+    const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` }, signal: AbortSignal.timeout(8000) });
     const d = await r.json();
     catalogue = (d?.data ?? []).map((m: { id: string }) => m.id);
   } catch {
@@ -155,6 +155,7 @@ async function candidates(vision: boolean): Promise<string[]> {
   if (live.length === 0) return prefs;
   const picked = prefs.filter((m) => live.includes(m));
   if (vision) picked.push(...live.filter((m) => VISION_HINT.test(m) && !picked.includes(m)));
+  else picked.push(...live.filter((m) => /(deepseek-v|glm-|kimi-k|qwen3|gpt-oss|nemotron-3-(super|ultra))/i.test(m) && !/(embed|guard|reward|coder|vl)/i.test(m) && !picked.includes(m)));
   return picked.length ? picked : prefs;
 }
 
@@ -166,34 +167,56 @@ async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL 
     { role: "system", content: `${system}\n\n${tool.description}\n${instruction}` },
     { role: "user", content },
   ];
-  let lastError = "No AI model is available right now. Try again later.";
-  const models = (await candidates(vision)).filter((m) => !retired.has(m)).slice(0, 4);
+  // The app waits up to two minutes and Supabase stops a function at about 150 seconds, so the
+  // whole answer must come within about 100 seconds: each model gets a share, then the next.
+  const deadline = Date.now() + 100_000;
+  const tried: string[] = [];
+  const models = (await candidates(vision)).filter((m) => !retired.has(m)).slice(0, 3);
   for (const model of models) {
+    const left = deadline - Date.now();
+    if (left < 15_000) break;
     const convo = [...messages];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ model, messages: convo, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false }),
-      });
+    let outcome = "";
+    for (let attempt = 0; attempt < 2 && !outcome; attempt++) {
+      let r: Response;
+      try {
+        r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model, messages: convo, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false,
+            // Answer directly: no long hidden reasoning (models that do not know these ignore them).
+            chat_template_kwargs: { thinking: false, enable_thinking: false },
+          }),
+          signal: AbortSignal.timeout(Math.min(70_000, deadline - Date.now())),
+        });
+      } catch {
+        outcome = "too slow";
+        break;
+      }
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        lastError = String(data?.detail ?? data?.error?.message ?? data?.title ?? `NVIDIA error ${r.status}`);
-        // Retired, missing or unable to read images: move on to the next model.
-        if (r.status === 404 || r.status === 410 || r.status === 400 || /end of life|not found|no longer|not support/i.test(lastError)) retired.add(model);
+        const msg = String(data?.detail ?? data?.error?.message ?? data?.title ?? `error ${r.status}`);
         if (r.status === 401 || r.status === 403) throw new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret.");
         if (r.status === 429) throw new Error("NVIDIA's free limit was reached for now. Try again in a minute.");
+        // Retired, missing or unable to read images: never try it again this session.
+        if (r.status === 404 || r.status === 410 || /end of life|not found|no longer/i.test(msg)) retired.add(model);
+        outcome = msg.slice(0, 80);
         break;
       }
       const text = String(data?.choices?.[0]?.message?.content ?? "");
       try {
-        return extract(text);
+        const out = extract(text) as Record<string, unknown>;
+        out._model = model;
+        return out;
       } catch {
-        lastError = "The AI's answer could not be read. Try again.";
         convo.push({ role: "assistant", content: text }, { role: "user", content: "That was not valid JSON. Reply again with the JSON object only." });
+        if (attempt === 1) outcome = "unreadable answer";
       }
     }
+    tried.push(`${model.split("/").pop()}: ${outcome || "failed"}`);
   }
+  const lastError = tried.length ? `The AI could not answer (${tried.join("; ")}). Try again.` : "No AI model is available right now. Try again later.";
   throw new Error(lastError);
 }
 
@@ -248,6 +271,11 @@ Deno.serve(async (req) => {
           `quick dishes on busy weekdays, bigger cooks at the weekend; a curry pairs with a rice or bread already in the library only if it makes sense. ` +
           `Use only ids from the library and only the given slots.`;
         return json(await ask(HOUSE, [{ type: "text", text }], WEEK_TOOL, 2500));
+      }
+      case "status": {
+        const text = (await candidates(false)).filter((m) => !retired.has(m));
+        const vision = (await candidates(true)).filter((m) => !retired.has(m));
+        return json({ text: text.slice(0, 3), vision: vision.slice(0, 3), catalogue: (await available()).length });
       }
       default:
         return json({ error: "Unknown task" }, 400);
