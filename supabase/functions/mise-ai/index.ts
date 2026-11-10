@@ -14,212 +14,117 @@
 // Tasks: "photo" (photos of a recipe -> recipe), "idea" (a request -> recipe),
 // "week" (the library and the week -> suggested dishes).
 
-// Strongest first. Text: recipe writing, JSON and planning. Vision: reading recipe photos.
-const TEXT_PREFS = [
-  Deno.env.get("MISE_MODEL") ?? "",
-  "deepseek-ai/deepseek-v4-flash", "zhipuai/glm-5.1", "moonshotai/kimi-k2.5", "deepseek-ai/deepseek-v4-pro",
-  "qwen/qwen3.5-397b-a17b", "openai/gpt-oss-120b", "nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-super-120b",
-  "mistralai/mistral-large-3-675b-instruct-2512",
-].filter(Boolean);
-const VISION_PREFS = [
-  Deno.env.get("MISE_VISION_MODEL") ?? "",
-  "qwen/qwen3.5-397b-a17b", "moonshotai/kimi-k2.5", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "nvidia/nemotron-3-nano-omni",
-  "mistralai/mistral-large-3-675b-instruct-2512", "mistralai/ministral-14b-instruct-2512", "meta/llama-4-maverick-17b-128e-instruct",
-].filter(Boolean);
-// Any other catalogue model whose name says it reads images.
-const VISION_HINT = /(vl|vision|omni|maverick|scout|ministral|gemma-3|pixtral|kimi-k2\.5)/i;
-const KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
-const ALLOWED = (Deno.env.get("MISE_AI_EMAILS") ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const ANON = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-
-const CUISINES = ["Indian", "Goan", "Pakistani", "Indo-Chinese", "Chinese", "Thai", "Indonesian", "Japanese", "Italian", "American", "British", "Turkish", "Fusion", "International"];
-const DISH_TYPES = ["Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew", "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad", "Breakfast", "Dessert and sweet bake", "Drink", "Sauce and dip"];
-const UNITS = ["g", "kg", "ml", "l", "tsp", "tbsp", "cup", "pc", "clove", "can", "pack", "bunch", "sprig", "pinch", "to taste"];
-
-const HOUSE = `You help a household in the UAE with their recipe and meal-planning app, Mise.
-They cook Indian and Goan food most often, plus Italian, Indo-Chinese and quick weeknight dishes.
-Write in British English. Use metric amounts and only these units: ${UNITS.join(", ")}.
-Garlic is counted in cloves; onions, tomatoes and eggs in pc; herbs for garnish in bunch (0.25 bunch for a garnish), curry leaves in sprig.
-Every ingredient gets a quantity unless it is "to taste" (then qty is empty).`;
-
-const ING = {
-  type: "object",
-  properties: {
-    name: { type: "string", description: "Ingredient name, capitalised, singular or plural as usually written, no amount" },
-    qty: { type: "string", description: "Number as text, e.g. 500, 1.5, 0.25. Empty for to taste." },
-    unit: { type: "string", enum: UNITS },
-    note: { type: "string", description: "Preparation or remark, e.g. finely chopped. Add 'est.' when you estimated the amount." },
-  },
-  required: ["name", "qty", "unit", "note"],
-};
-
-const RECIPE_TOOL = {
-  name: "save_recipe",
-  description: "Save one recipe in Mise's format.",
-  input_schema: {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Short dish name in sentence case" },
-      cuisine: { type: "string", enum: CUISINES },
-      dishType: { type: "string", enum: DISH_TYPES },
-      serves: { type: "integer", minimum: 1, maximum: 24 },
-      prep: { type: "string", description: "Prep minutes as digits, or empty" },
-      cook: { type: "string", description: "Cook minutes as digits, or empty" },
-      tags: { type: "string", description: "Optional facets, comma separated, from: Vegetarian, Quick, Air fryer, Oven, Pressure cooker" },
-      ings: { type: "array", items: ING, description: "Ingredients always used" },
-      slots: {
-        type: "array",
-        description: "Swaps, only when the recipe offers a real choice (e.g. Protein: Chicken or Prawn). Usually empty.",
-        items: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            options: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: { label: { type: "string" }, isDefault: { type: "boolean" }, note: { type: "string" }, ings: { type: "array", items: ING } },
-                required: ["label", "isDefault", "note", "ings"],
-              },
-            },
-          },
-          required: ["name", "options"],
-        },
-      },
-      steps: { type: "array", items: { type: "string" }, description: "Clear numbered-style steps without the numbers" },
-      notes: { type: "string", description: "Tips, serving ideas, and anything you were unsure about" },
-    },
-    required: ["title", "cuisine", "dishType", "serves", "prep", "cook", "tags", "ings", "slots", "steps", "notes"],
-  },
-};
-
-const WEEK_TOOL = {
-  name: "suggest_week",
-  description: "Suggest dishes for the empty slots of the week, chosen only from the library.",
-  input_schema: {
-    type: "object",
-    properties: {
-      plan: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            date: { type: "string", description: "ISO date from the given days" },
-            meal: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
-            recipeId: { type: "integer", description: "id of the main dish from the library" },
-            sideId: { type: "integer", description: "id of a rice or bread side from the library to cook with a curry, or 0 for none" },
-            servings: { type: "integer", description: "Servings to cook, following the kitchen profile (bigger when the cook covers extra meals)" },
-            reason: { type: "string", description: "Why this dish, in at most eight words" },
-          },
-          required: ["date", "meal", "recipeId", "sideId", "servings", "reason"],
-        },
-      },
-      summary: { type: "string", description: "One short sentence about the week's balance" },
-    },
-    required: ["plan", "summary"],
-  },
-};
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
-
-/** Pulls the JSON object out of a model reply (drops thinking, code fences and chatter). */
-function extract(text: string): unknown {
-  const t = text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/```(?:json)?/g, "");
-  const a = t.indexOf("{"), b = t.lastIndexOf("}");
-  if (a < 0 || b <= a) throw new Error("no json");
-  return JSON.parse(t.slice(a, b + 1));
-}
-
-/**
- * Asks the model for one JSON object matching the tool's schema. Retries once if the reply is
- * not valid JSON.
- */
-let catalogue: string[] | null = null;
-async function available(): Promise<string[]> {
-  if (catalogue) return catalogue;
-  try {
-    const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` }, signal: AbortSignal.timeout(8000) });
-    const d = await r.json();
-    catalogue = (d?.data ?? []).map((m: { id: string }) => m.id);
-  } catch {
-    catalogue = [];
-  }
-  return catalogue!;
-}
+// Model families, best first. NVIDIA renames versions often (v4, v4.1...), so these match by
+// pattern against the live catalogue, newest version first within a family.
+// Text: fast, reliable at JSON. Vision: reads recipe photos.
+const TEXT_FAMILIES = [
+  /openai\/gpt-oss-120b/i, /deepseek-v[\d.]+-flash/i, /qwen3[\d.]*-\d+b-a\d+b(?!.*(vl|coder|thinking))/i, /glm-[\d.]+(?!.*v)/i,
+  /kimi-k[\d.]+(?!.*thinking)/i, /mistral-(large|medium)/i, /nemotron-3-super/i, /deepseek-v[\d.]+(?!.*flash)/i,
+];
+const VISION_FAMILIES = [
+  /qwen[\d.]*-?vl/i, /qwen3\.5/i, /kimi-k2\.[5-9]/i, /nemotron-3-nano-omni/i, /mistral-(large|medium)-3/i, /ministral/i, /gemma-3/i, /llama-4-maverick/i, /(vision|omni|pixtral|-vl)/i,
+];
+const SKIP = /(embed|guard|reward|safety|rerank|parse|coder|math|retriev|translate|audio|asr|tts|clip)/i;
 
 /** The models to try, in order: preferred ones that exist, then (for photos) any image reader. */
 async function candidates(vision: boolean): Promise<string[]> {
-  const live = await available();
-  const prefs = vision ? VISION_PREFS : TEXT_PREFS;
-  if (live.length === 0) return prefs;
-  const picked = prefs.filter((m) => live.includes(m));
-  if (vision) picked.push(...live.filter((m) => VISION_HINT.test(m) && !picked.includes(m)));
-  else picked.push(...live.filter((m) => /(deepseek-v|glm-|kimi-k|qwen3|gpt-oss|nemotron-3-(super|ultra))/i.test(m) && !/(embed|guard|reward|coder|vl)/i.test(m) && !picked.includes(m)));
-  return picked.length ? picked : prefs;
+  const forced = Deno.env.get(vision ? "MISE_VISION_MODEL" : "MISE_MODEL");
+  const live = (await available()).filter((m) => !SKIP.test(m) && !retired.has(m));
+  const families = vision ? VISION_FAMILIES : TEXT_FAMILIES;
+  const ranked: string[] = [];
+  if (good[vision ? 1 : 0]) ranked.push(good[vision ? 1 : 0]!);
+  for (const f of families) {
+    // Newest version first within a family (v4.1 before v4).
+    live.filter((m) => f.test(m)).sort((x, y) => y.localeCompare(x, undefined, { numeric: true })).forEach((m) => { if (!ranked.includes(m)) ranked.push(m); });
+  }
+  if (forced) ranked.unshift(forced);
+  return [...new Set(ranked)].filter((m) => !retired.has(m));
 }
+
+/** The last model that answered well, tried first next time (text, vision). */
+const good: [string | null, string | null] = [null, null];
 
 const retired = new Set<string>();
 
+/** One model, one try (plus one retry if the JSON is unreadable). Throws a short reason. */
+async function tryModel(model: string, messages: unknown[], maxTokens: number, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const convo = [...messages];
+  let plain = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let r: Response;
+    try {
+      r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, messages: convo, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false,
+          // Answer directly: no long hidden reasoning. Dropped if a model rejects the setting.
+          ...(plain ? {} : { chat_template_kwargs: { thinking: false, enable_thinking: false } }),
+        }),
+        signal,
+      });
+    } catch {
+      throw new Error("too slow");
+    }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = String(data?.detail ?? data?.error?.message ?? data?.title ?? `error ${r.status}`);
+      if (r.status === 401 || r.status === 403) throw new Error("KEY");
+      if (r.status === 429) throw new Error("LIMIT");
+      if (r.status === 400 && !plain && /kwargs|template|unexpected|extra/i.test(msg)) { plain = true; continue; }
+      // Listed but not callable on this account, retired, or unable to read images: skip for good.
+      if (r.status === 404 || r.status === 410 || /end of life|not found|no longer|not support|does not support image/i.test(msg)) retired.add(model);
+      throw new Error(/not found/i.test(msg) ? "not on this account" : msg.slice(0, 60));
+    }
+    const text = String(data?.choices?.[0]?.message?.content ?? "");
+    try {
+      const out = extract(text) as Record<string, unknown>;
+      out._model = model;
+      return out;
+    } catch {
+      convo.push({ role: "assistant", content: text }, { role: "user", content: "That was not valid JSON. Reply again with the JSON object only." });
+    }
+  }
+  throw new Error("unreadable answer");
+}
+
+/**
+ * Asks for one JSON object matching the tool's schema. Three models run at once and the first
+ * good answer wins (the others are stopped), so one slow or missing model never holds things
+ * up. If all three fail, the next three get the time that is left. Everything finishes within
+ * about 100 seconds, inside the app's two-minute wait and Supabase's limit.
+ */
 async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000, vision = false) {
   const instruction = `Reply with one JSON object only, no other text, matching this JSON schema:\n${JSON.stringify(tool.input_schema)}`;
   const messages: unknown[] = [
     { role: "system", content: `${system}\n\n${tool.description}\n${instruction}` },
     { role: "user", content },
   ];
-  // The app waits up to two minutes and Supabase stops a function at about 150 seconds, so the
-  // whole answer must come within about 100 seconds: each model gets a share, then the next.
   const deadline = Date.now() + 100_000;
   const tried: string[] = [];
-  const models = (await candidates(vision)).filter((m) => !retired.has(m)).slice(0, 3);
-  for (const model of models) {
-    const left = deadline - Date.now();
-    if (left < 15_000) break;
-    const convo = [...messages];
-    let outcome = "";
-    for (let attempt = 0; attempt < 2 && !outcome; attempt++) {
-      let r: Response;
-      try {
-        r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model, messages: convo, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false,
-            // Answer directly: no long hidden reasoning (models that do not know these ignore them).
-            chat_template_kwargs: { thinking: false, enable_thinking: false },
-          }),
-          signal: AbortSignal.timeout(Math.min(70_000, deadline - Date.now())),
-        });
-      } catch {
-        outcome = "too slow";
-        break;
-      }
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        const msg = String(data?.detail ?? data?.error?.message ?? data?.title ?? `error ${r.status}`);
-        if (r.status === 401 || r.status === 403) throw new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret.");
-        if (r.status === 429) throw new Error("NVIDIA's free limit was reached for now. Try again in a minute.");
-        // Retired, missing or unable to read images: never try it again this session.
-        if (r.status === 404 || r.status === 410 || /end of life|not found|no longer/i.test(msg)) retired.add(model);
-        outcome = msg.slice(0, 80);
-        break;
-      }
-      const text = String(data?.choices?.[0]?.message?.content ?? "");
-      try {
-        const out = extract(text) as Record<string, unknown>;
-        out._model = model;
-        return out;
-      } catch {
-        convo.push({ role: "assistant", content: text }, { role: "user", content: "That was not valid JSON. Reply again with the JSON object only." });
-        if (attempt === 1) outcome = "unreadable answer";
-      }
+  let queue = await candidates(vision);
+  while (queue.length > 0 && deadline - Date.now() > 12_000) {
+    const batch = queue.slice(0, 3);
+    queue = queue.slice(3).filter((m) => !retired.has(m));
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), Math.min(60_000, deadline - Date.now()));
+    try {
+      const out = await Promise.any(batch.map((m) => tryModel(m, messages, maxTokens, stop.signal).catch((e) => {
+        tried.push(`${m.split("/").pop()}: ${e instanceof Error ? e.message : e}`);
+        throw e;
+      })));
+      good[vision ? 1 : 0] = String(out._model);
+      return out;
+    } catch (e) {
+      const reasons = e instanceof AggregateError ? e.errors.map((x) => String(x?.message ?? x)) : [];
+      if (reasons.includes("KEY")) throw new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret.");
+      if (reasons.length > 0 && reasons.every((r) => r === "LIMIT")) throw new Error("NVIDIA's free limit was reached for now. Try again in a minute.");
+    } finally {
+      clearTimeout(timer);
+      stop.abort();
     }
-    tried.push(`${model.split("/").pop()}: ${outcome || "failed"}`);
   }
-  const lastError = tried.length ? `The AI could not answer (${tried.join("; ")}). Try again.` : "No AI model is available right now. Try again later.";
-  throw new Error(lastError);
+  throw new Error(tried.length ? `The AI could not answer (${tried.slice(0, 6).join("; ")}). Try again.` : "No AI model is available right now. Try again later.");
 }
 
 Deno.serve(async (req) => {
@@ -278,9 +183,24 @@ Deno.serve(async (req) => {
         return json(await ask(SYSTEM, [{ type: "text", text }], WEEK_TOOL, 2500));
       }
       case "status": {
-        const text = (await candidates(false)).filter((m) => !retired.has(m));
-        const vision = (await candidates(true)).filter((m) => !retired.has(m));
-        return json({ text: text.slice(0, 3), vision: vision.slice(0, 3), catalogue: (await available()).length });
+        // A tiny live test of the top models, so Settings can say what really works.
+        const probe = async (vision: boolean) => {
+          const list = (await candidates(vision)).slice(0, 4);
+          const results = await Promise.all(list.map(async (m) => {
+            const t0 = Date.now();
+            try {
+              await tryModel(m, [{ role: "user", content: 'Reply with {"ok": true}' }], 20, AbortSignal.timeout(20_000));
+              return { model: m, ok: true, ms: Date.now() - t0 };
+            } catch (e) {
+              return { model: m, ok: false, why: e instanceof Error ? e.message : String(e) };
+            }
+          }));
+          const working = results.filter((r) => r.ok).sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0));
+          if (working[0]) good[vision ? 1 : 0] = working[0].model;
+          return { working: working.map((r) => r.model), failed: results.filter((r) => !r.ok) };
+        };
+        const [text, vision] = await Promise.all([probe(false), probe(true)]);
+        return json({ text: text.working, vision: vision.working, failed: [...text.failed, ...vision.failed], catalogue: (await available()).length });
       }
       default:
         return json({ error: "Unknown task" }, 400);

@@ -278,8 +278,16 @@ private fun AiCheckCard() {
             scope.launch {
                 result = try {
                     val j = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.mise.sync.Supa.ai(org.json.JSONObject().put("task", "status")) }
-                    fun first(k: String) = j.optJSONArray(k)?.optString(0)?.substringAfter('/')?.ifBlank { null } ?: "none found"
-                    "Ready. Writing and planning: ${first("text")}. Photos: ${first("vision")}."
+                    fun names(k: String): List<String> = j.optJSONArray(k)?.let { arr -> (0 until arr.length()).map { arr.getString(it).substringAfter('/') } } ?: emptyList()
+                    val text = names("text"); val vision = names("vision")
+                    val failed = j.optJSONArray("failed")?.let { arr ->
+                        (0 until arr.length()).map { arr.getJSONObject(it) }.joinToString("; ") { it.optString("model").substringAfter('/') + ": " + it.optString("why") }
+                    }.orEmpty()
+                    when {
+                        text.isNotEmpty() && vision.isNotEmpty() -> "Ready. Writing and planning: ${text.joinToString(", ")}. Photos: ${vision.joinToString(", ")}."
+                        text.isNotEmpty() -> "Writing and planning work (${text.joinToString(", ")}), but no photo model answered. $failed"
+                        else -> "No model answered just now. $failed"
+                    }
                 } catch (e: Exception) {
                     app.mise.data.Ai.friendly(e)
                 }
