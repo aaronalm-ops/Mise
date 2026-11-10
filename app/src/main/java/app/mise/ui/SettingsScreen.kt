@@ -48,6 +48,7 @@ import app.mise.Reminder
 import app.mise.data.Prefs
 import app.mise.data.RecipeRepo
 import java.time.DayOfWeek
+import kotlinx.coroutines.launch
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -90,6 +91,9 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
 
             SectionLabel("Planning reminder")
             ReminderCard()
+
+            SectionLabel("Mise AI")
+            AiCheckCard()
 
             SectionLabel("Recipes")
             ImportCard()
@@ -251,5 +255,35 @@ fun MakerCredit() {
             style = Mise.type.credit,
             color = c.text,
         )
+    }
+}
+
+/** Checks the AI helpers end to end and says which models they will use. */
+@Composable
+private fun AiCheckCard() {
+    val c = Mise.colours
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var busy by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var result by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    Card {
+        NavRow(if (busy) "Checking…" else "Check Mise AI", "Photo to recipe, recipe from an idea, suggest dishes") {
+            if (busy) return@NavRow
+            if (!app.mise.data.Ai.available) { result = "Sign in first (Household above)."; return@NavRow }
+            busy = true; result = null
+            scope.launch {
+                result = try {
+                    val j = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.mise.sync.Supa.ai(org.json.JSONObject().put("task", "status")) }
+                    fun first(k: String) = j.optJSONArray(k)?.optString(0)?.substringAfter('/')?.ifBlank { null } ?: "none found"
+                    "Ready. Writing and planning: ${first("text")}. Photos: ${first("vision")}."
+                } catch (e: Exception) {
+                    app.mise.data.Ai.friendly(e)
+                }
+                busy = false
+            }
+        }
+        result?.let { msg ->
+            Divider()
+            Text(msg, style = Mise.type.bodyS, color = c.text, modifier = Modifier.padding(16.dp))
+        }
     }
 }
