@@ -116,6 +116,13 @@ fun ListScreen(weekStart: LocalDate, onWeek: (LocalDate) -> Unit, onSettings: ()
         }
     }
 
+    /** A staple you are out of goes on the list (Pantry: Out) until it is bought. */
+    fun markOut(item: ListItem) {
+        tick(false)
+        repo.scope.launch { repo.setLevel(item.key, item.name, Pantry.OUT) }
+        Toasts.undo("${item.name} is out: it is on the list") { repo.scope.launch { repo.setLevel(item.key, item.name, Pantry.HAVE) } }
+    }
+
     Column(Modifier.fillMaxSize()) {
         val d = data
         val dishes = d?.dishes ?: 0
@@ -196,8 +203,8 @@ fun ListScreen(weekStart: LocalDate, onWeek: (LocalDate) -> Unit, onSettings: ()
             }
             collapsible(
                 key = "staples", label = "Usually at home", count = staples.size, open = staplesOpen, onOpen = { staplesOpen = !staplesOpen },
-                rows = staples, onToggle = ::toggle, onOptions = { longPress(); options = it },
-                note = "Staples are left off the list. Tick one you are out of, or hold it to change.",
+                rows = staples, onToggle = ::markOut, onOptions = { longPress(); options = it },
+                note = "Staples are left off the list. Tap one you are out of to put it on the list.",
             )
             collapsible(
                 key = "basket", label = "In the basket", count = basket.size, open = basketOpen, onOpen = { basketOpen = !basketOpen },

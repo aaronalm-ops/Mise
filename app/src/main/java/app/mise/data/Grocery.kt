@@ -78,7 +78,10 @@ enum class Aisle(val key: String, val label: String) {
             put(SPICES, "salt", "pink salt", "flaky salt", "turmeric", "cumin", "garam masala", "cardamom", "clove", "cinnamon", "cinnamon stick", "bay leaf", "pepper", "black pepper", "white pepper", "peppercorn", "paprika", "smoked paprika", "saffron", "fenugreek", "kasuri methi", "asafoetida", "hing", "nutmeg", "star anise", "cayenne", "oregano", "dried herb", "italian herb", "dry red chilli", "whole spice", "whole garam masala", "italian seasoning", "cajun seasoning", "msg", "maggi cube", "maggi masala", "stock cube")
             put(PANTRY, "oil", "olive oil", "mustard oil", "sesame oil", "vinegar", "sauce", "soy sauce", "oyster sauce", "fish sauce", "hoisin sauce", "sriracha", "ketchup", "mayonnaise", "mayo", "garlic mayo", "mustard", "honey", "jam", "pickle", "tamarind", "salsa", "pesto", "peanut butter", "coconut milk", "coconut cream", "tomato paste", "tomato puree", "paste", "curry paste", "ginger garlic paste", "stock", "chicken stock", "tinned", "canned tuna", "tuna", "sesame dressing", "kecap manis", "shrimp paste", "apple sauce", "bbq sauce", "sweet chilli sauce", "worcestershire sauce")
             put(BAKING, "baking powder", "baking soda", "cocoa", "cocoa powder", "chocolate", "chocolate chip", "vanilla", "vanilla essence", "vanilla extract", "icing sugar", "yeast")
-            put(PRODUCE, "lime juice", "lemon juice", "lemon zest")
+            put(PRODUCE, "lime juice", "lemon juice", "lemon zest", "red pepper", "green pepper", "yellow pepper", "green pea", "pea")
+            put(PANTRY, "ginger garlic paste", "garlic paste", "ginger paste", "corned beef", "tinned corned beef")
+            put(SPICES, "thai dry spice", "spice mix")
+            put(FROZEN, "paratha", "frozen paratha")
             put(DRINKS, "juice", "orange juice", "cranberry juice", "pineapple juice", "grape juice", "sparkling water", "sparkling juice", "soda", "soda water", "sprite", "pepsi", "ginger ale", "ginger beer", "coconut water")
             put(FROZEN, "frozen", "frozen vegetable", "frozen pea", "ice cream", "vanilla ice cream", "puff pastry")
             put(PRODUCE, "onion", "tomato", "cherry tomato", "potato", "garlic", "ginger", "green chilli", "chilli", "chili", "red chilli", "carrot", "capsicum", "bell pepper", "lemon", "lime", "cucumber", "spinach", "paalak", "cabbage", "cauliflower", "broccoli", "brinjal", "aubergine", "eggplant", "okra", "bhindi", "french bean", "green bean", "pea", "green pea", "mushroom", "lettuce", "salad leaf", "apple", "banana", "mango", "coconut", "fresh coconut", "avocado", "zucchini", "pumpkin", "sprout", "corn", "bok choy", "shallot", "passion fruit", "pomegranate", "strawberry", "blueberry", "vegetable", "mixed vegetable", "coleslaw")
@@ -96,8 +99,12 @@ enum class Aisle(val key: String, val label: String) {
         fun guess(name: String): Aisle {
             val n = Names.keyOf(name)
             val words = " $n "
-            if (spiceForms.containsMatchIn(n) && !n.contains("baking") && !n.contains("cocoa") && !n.contains("cornflake") && !n.contains("custard")) {
+            if (spiceForms.containsMatchIn(n) && listOf("baking", "cocoa", "cornflake", "custard", "milk", "coconut", "oat").none { n.contains(it) }) {
                 return SPICES
+            }
+            // Halal beef or chicken bacon, salami and pepperoni are sold with the meat, not in the pork section.
+            if (listOf("beef", "chicken", "turkey").any { words.contains(" $it ") } && listOf("bacon", "salami", "pepperoni", "ham", "sausage").any { words.contains(" $it ") }) {
+                return MEAT
             }
             var best: Pair<String, Aisle>? = null
             for ((k, a) in normalised) {
@@ -122,12 +129,15 @@ object Names {
         "minced beef" to "minced meat", "minced meat kheema" to "minced meat", "kheema" to "minced meat", "laban" to "buttermilk",
         "buttermilk laban" to "buttermilk", "chickpea chana" to "chickpea", "poha flattened rice" to "poha", "dal lentil" to "dal",
         "curd yoghurt" to "yoghurt", "spring onion white" to "spring onion", "spinach paalak" to "spinach",
+        "cardamom pod" to "cardamom", "green cardamom" to "cardamom", "black peppercorn" to "peppercorn", "whole peppercorn" to "peppercorn",
+        "basmati" to "basmati rice", "garlic paste" to "ginger garlic paste", "mince" to "minced meat",
     )
 
-    private val keepS = setOf("peas", "hummus", "couscous", "molasses", "asparagus", "swiss", "chips")
+    private val keepS = setOf("hummus", "couscous", "molasses", "asparagus", "swiss", "chips")
 
     private fun singular(w: String): String = when {
         w in keepS -> w
+        w.endsWith("'s") -> w
         w.endsWith("leaves") -> w.dropLast(6) + "leaf"
         w.endsWith("chillies") || w.endsWith("chilies") -> w.dropLast(2)
         w.endsWith("berries") -> w.dropLast(3) + "y"
@@ -188,7 +198,9 @@ private val buying = mapOf(
     "spaghetti" to Buy(packSize = 500.0, packUnit = Measure.G), "penne" to Buy(packSize = 500.0, packUnit = Measure.G),
     "macaroni" to Buy(packSize = 500.0, packUnit = Measure.G), "cheddar" to Buy(packSize = 200.0, packUnit = Measure.G),
     "mozzarella" to Buy(packSize = 200.0, packUnit = Measure.G), "mushroom" to Buy(packSize = 250.0, packUnit = Measure.G),
-    "butter" to Buy(gPerCup = 227.0), "chicken stock" to Buy(mlPerCup = 240.0), "stock" to Buy(mlPerCup = 240.0),
+    "butter" to Buy(gPerCup = 227.0),
+    "rice" to Buy(gPerCup = 185.0), "basmati rice" to Buy(gPerCup = 185.0), "dal" to Buy(gPerCup = 200.0),
+    "flour" to Buy(gPerCup = 125.0), "wheat flour" to Buy(gPerCup = 125.0), "atta" to Buy(gPerCup = 125.0), "sugar" to Buy(gPerCup = 200.0), "chicken stock" to Buy(mlPerCup = 240.0), "stock" to Buy(mlPerCup = 240.0),
     "mayonnaise" to Buy(mlPerCup = 240.0), "honey" to Buy(gPerCup = 340.0),
 )
 
@@ -206,10 +218,13 @@ object Grocery {
         val needs = entries.filter { !it.leftovers }.flatMap { e ->
             val all = e.recipe.ingredients + e.chosenOptions.flatMap { it.ingredients }
             all.map { i ->
-                val (q, u) = Scaling.scale(i.qty, i.unit, e.recipe.baseServings, e.servings, i.name, e.recipe.exact)
+                val (q, u) = Scaling.scale(i.qty, i.unit, e.recipe.baseServings, e.servings, i.name, e.recipe.exact, e.recipe.ratioLocked)
                 val k = keyOf(i.name)
                 Need(aliases[k] ?: k, i.name, q, u, e.recipe.title)
             }
+        }.map { n ->
+            // Cooked rice is made from raw rice at about a third of the volume.
+            if (n.key == "cooked rice") n.copy(key = "rice", name = "Rice", qty = n.qty?.let { it / 3 }) else n
         }.filter { it.key !in Names.neverBuy && it.key.isNotBlank() }
         return needs.groupBy { it.key }.map { (key, list) ->
             val m = merge(key, list.map { it.qty to it.unit })
@@ -267,7 +282,8 @@ object Grocery {
         if (cloves > 0 && b?.clovesPerBulb != null) {
             val bulbs = ceil(cloves / b.clovesPerBulb).toInt().coerceAtLeast(1)
             parts += if (bulbs == 1) "1 bulb" else "$bulbs bulbs"
-            detail = Scaling.fraction(Scaling.round(cloves, Measure.PC)) + " cloves"
+            val c = Scaling.round(cloves, Measure.PC)
+            detail = Scaling.fraction(c) + if (c <= 1.0) " clove" else " cloves"
             measure = cloves; measureUnit = Measure.CLOVE
         }
         // Produce bought by weight: show the count with the weight it comes to.

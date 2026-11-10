@@ -43,6 +43,25 @@ object Supa {
     var cursor: String
         get() = prefs.getString("cursor", EPOCH)!!
         set(v) { prefs.edit().putString("cursor", v).apply() }
+    /** A join or rejoin whose first merge has not finished yet (survives the app closing). */
+    var mergePending: Boolean
+        get() = prefs.getBoolean("mergePending", false)
+        set(v) { prefs.edit().putBoolean("mergePending", v).commit() }
+    /** The household this phone's sync links belong to, kept across sign-out and leaving. */
+    val linkedHousehold get() = prefs.getString("linkedHousehold", null)
+    fun setLinkedHousehold(id: String?) { prefs.edit().apply { if (id == null) remove("linkedHousehold") else putString("linkedHousehold", id) }.commit() }
+    /** Phone time when the last successful pull started (for the overlap window). */
+    var pulledAt: Long
+        get() = prefs.getLong("pulledAt", 0)
+        set(v) { prefs.edit().putLong("pulledAt", v).apply() }
+    /** Plan entries that arrived before their recipe; fetched again on each pull until they apply. */
+    var pendingPlans: Set<String>
+        get() = prefs.getStringSet("pendingPlans", emptySet())!!.toSet()
+        set(v) { prefs.edit().putStringSet("pendingPlans", v).apply() }
+    /** Last time membership was confirmed with the server. */
+    var memberCheckedAt: Long
+        get() = prefs.getLong("memberCheckedAt", 0)
+        set(v) { prefs.edit().putLong("memberCheckedAt", v).apply() }
     var notice: String?
         get() = prefs.getString("notice", null)
         set(v) { prefs.edit().apply { if (v == null) remove("notice") else putString("notice", v) }.apply() }
@@ -58,33 +77,51 @@ object Supa {
             .putLong("expires", System.currentTimeMillis() + j.optLong("expires_in", 3600) * 1000)
             .putString("email", user?.optString("email")?.takeIf { it.isNotBlank() } ?: email)
             .putString("user", user?.optString("id")?.takeIf { it.isNotBlank() } ?: userId)
-            .apply()
+            .commit() // refresh tokens are single-use: never lose the new one if the app closes now
     }
 
     fun setDisplayName(name: String) = prefs.edit().putString("display", name.trim()).apply()
 
-    /** Sets (or clears) the household. A different household starts a fresh sync from zero. */
+    /**
+     * Sets (or clears) the household. Joining (or rejoining) starts a merge that the sync loop
+     * finishes even if the screen closes; the household's copy is taken first and matched by name.
+     */
     fun setHousehold(j: JSONObject?): Boolean {
         val newId = j?.optString("id")
         val changed = newId != householdId
         val e = prefs.edit()
         if (j == null) {
-            e.remove("household").remove("householdName").remove("invite").remove("cursor")
+            e.remove("household").remove("householdName").remove("invite").remove("cursor").remove("mergePending")
         } else {
             e.putString("household", newId).putString("householdName", j.optString("name")).putString("invite", j.optString("invite_code"))
-            if (changed) e.putString("cursor", EPOCH)
+            if (changed) e.putString("cursor", EPOCH).putBoolean("mergePending", true)
         }
-        e.apply()
+        e.commit()
         return changed
     }
 
-    /** Ends the session on the server too, then forgets it here. */
+    /** Updates the household's name and invite code without starting a merge. */
+    fun refreshHousehold(j: JSONObject) {
+        if (j.optString("id") != householdId) return
+        prefs.edit().putString("householdName", j.optString("name")).putString("invite", j.optString("invite_code")).apply()
+    }
+
+    /**
+     * Ends the session on the server too, then forgets it here. Sync links are kept, so signing
+     * back in to the same household carries on without duplicates or lost edits.
+     */
     fun signOut() {
         val access = prefs.getString("access", null)
         generation++
         runCatching { if (access != null) call("POST", "/auth/v1/logout", "{}", access) }
+        endSession()
+    }
+
+    /** Forgets the session and household on this phone; keeps the name and the sync links. */
+    private fun endSession() {
         val display = displayName
-        prefs.edit().clear().putString("display", display).apply()
+        val linked = linkedHousehold ?: householdId
+        prefs.edit().clear().putString("display", display).apply { if (linked != null) putString("linkedHousehold", linked) }.commit()
     }
 
     // ---- HTTP ----
@@ -123,6 +160,7 @@ object Supa {
     }
 
     private fun friendly(msg: String): String = when {
+        msg.contains("Refresh Token", true) -> "Please sign in again (Settings, Household)."
         msg.contains("Invalid login credentials", true) -> "That email and password do not match."
         msg.contains("Email not confirmed", true) -> "Please confirm your email first: open the link we sent, then sign in."
         msg.contains("already registered", true) -> "That email already has an account. Sign in instead."
@@ -174,7 +212,17 @@ object Supa {
         if (access != null && System.currentTimeMillis() < expires - 60_000) return access
         val refresh = prefs.getString("refresh", null) ?: throw ServerError(401, "Not signed in")
         val gen = generation
-        val j = JSONObject(call("POST", "/auth/v1/token?grant_type=refresh_token", JSONObject().put("refresh_token", refresh).toString(), null))
+        val j = try {
+            JSONObject(call("POST", "/auth/v1/token?grant_type=refresh_token", JSONObject().put("refresh_token", refresh).toString(), null))
+        } catch (e: ServerError) {
+            if (e.code == 400 || e.code == 401) {
+                // The session has ended on the server: say so once, instead of failing quietly forever.
+                endSession()
+                notice = "Your sign-in ended. Sign in again to keep sharing; everything on this phone is kept."
+                throw ServerError(401, "Please sign in again (Settings, Household).")
+            }
+            throw e
+        }
         saveSession(j, gen)
         if (gen != generation) throw ServerError(401, "Signed out")
         j.getString("access_token")
@@ -205,8 +253,9 @@ object Supa {
         return if (text.isBlank()) JSONArray() else JSONArray(text)
     }
 
-    fun changesSince(household: String, since: String, limit: Int = 500): JSONArray {
-        val q = "household_id=eq.$household&updated_at=gt." + java.net.URLEncoder.encode(since, "UTF-8") +
+    /** Rows changed after [since]; [inclusive] also returns rows at exactly [since] (later pages). */
+    fun changesSince(household: String, since: String, limit: Int = 500, inclusive: Boolean = false): JSONArray {
+        val q = "household_id=eq.$household&updated_at=" + (if (inclusive) "gte." else "gt.") + java.net.URLEncoder.encode(since, "UTF-8") +
             "&order=updated_at.asc,kind.asc,uid.asc&limit=$limit&select=kind,uid,data,deleted,updated_at,updated_by"
         return JSONArray(authed("GET", "/rest/v1/mise_rows?$q", null))
     }
@@ -220,5 +269,5 @@ object Supa {
     fun isOffline(e: Throwable) = e is IOException
 
     /** Row-level security refused us: we are no longer in this household. */
-    fun isNotMember(e: Throwable) = e is ServerError && (e.pgCode == "42501" || e.code == 403)
+    fun isNotMember(e: Throwable) = e is ServerError && e.pgCode == "42501"
 }

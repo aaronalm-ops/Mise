@@ -38,6 +38,11 @@ create table if not exists mise_rows (
 );
 create index if not exists mise_rows_changes on mise_rows (household_id, updated_at);
 
+-- Sensible sizes: one shared item stays under 256 KB (a long recipe is about 10 KB).
+alter table mise_rows drop constraint if exists mise_rows_size;
+alter table mise_rows add constraint mise_rows_size
+  check (octet_length(data::text) <= 262144 and length(kind) <= 24 and length(uid) <= 400) not valid;
+
 create table if not exists mise_join_attempts (
   user_id uuid not null,
   at timestamptz not null default now()
@@ -60,17 +65,23 @@ begin
     foreign key (created_by) references auth.users(id) on delete set null;
 end $$;
 
--- 10 characters, 31-letter alphabet: about 10^15 codes.
+-- 10 characters, 31-letter alphabet: about 10^15 codes. Bytes of 248 or more are skipped, so
+-- every letter is equally likely (248 = 8 x 31).
 create or replace function mise_new_code() returns text
 language plpgsql volatile set search_path = public, extensions as $$
 declare
   alphabet constant text := 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-  b bytea := gen_random_bytes(10);
+  b bytea;
   s text := '';
   i int;
+  v int;
 begin
-  for i in 0..9 loop
-    s := s || substr(alphabet, (get_byte(b, i) % 31) + 1, 1);
+  while length(s) < 10 loop
+    b := gen_random_bytes(16);
+    for i in 0..15 loop
+      v := get_byte(b, i);
+      if v < 248 and length(s) < 10 then s := s || substr(alphabet, (v % 31) + 1, 1); end if;
+    end loop;
   end loop;
   return s;
 end $$;
@@ -129,36 +140,39 @@ begin
     where m.user_id = auth.uid() order by m.joined_at limit 1;
   if found then return mise_household_json(h); end if;
   insert into mise_households (name, created_by, invite_code)
-    values (coalesce(nullif(trim(p_name), ''), 'Home'), auth.uid(), mise_new_code()) returning * into h;
-  insert into mise_members (household_id, user_id, display_name) values (h.id, auth.uid(), coalesce(p_display, ''));
+    values (left(coalesce(nullif(trim(p_name), ''), 'Home'), 40), auth.uid(), mise_new_code()) returning * into h;
+  insert into mise_members (household_id, user_id, display_name) values (h.id, auth.uid(), left(coalesce(trim(p_display), ''), 40));
   return mise_household_json(h);
 end $$;
 
+-- Refusals are returned as {"error": "..."} rather than raised, so the attempt is still counted
+-- (a raise would undo it). The household row is locked, so two joins at once cannot make 3.
 create or replace function mise_join_household(p_code text, p_display text) returns json
 language plpgsql security definer set search_path = public as $$
 declare
   h mise_households;
   n int;
   code text := upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
+  who text := left(coalesce(trim(p_display), ''), 40);
 begin
   if auth.uid() is null then raise exception 'Not signed in'; end if;
   select count(*) into n from mise_join_attempts where user_id = auth.uid() and at > now() - interval '1 hour';
-  if n >= 10 then raise exception 'Too many tries. Wait an hour, then try again.'; end if;
+  if n >= 10 then return json_build_object('error', 'Too many tries. Wait an hour, then try again.'); end if;
   insert into mise_join_attempts (user_id) values (auth.uid());
   delete from mise_join_attempts where at < now() - interval '1 day';
 
-  select * into h from mise_households where invite_code = code;
-  if not found then raise exception 'No household has that code. Check it on the other phone.'; end if;
+  select * into h from mise_households where invite_code = code for update;
+  if not found then return json_build_object('error', 'No household has that code. Check it on the other phone.'); end if;
   if exists (select 1 from mise_members where household_id = h.id and user_id = auth.uid()) then
-    update mise_members set display_name = coalesce(p_display, display_name) where household_id = h.id and user_id = auth.uid();
+    update mise_members set display_name = coalesce(nullif(who, ''), display_name) where household_id = h.id and user_id = auth.uid();
     return mise_household_json(h);
   end if;
   if exists (select 1 from mise_members where user_id = auth.uid()) then
-    raise exception 'You are already in a household. Leave it first.';
+    return json_build_object('error', 'You are already in a household. Leave it first.');
   end if;
   select count(*) into n from mise_members where household_id = h.id;
-  if n >= 2 then raise exception 'That household is full (2 people).'; end if;
-  insert into mise_members (household_id, user_id, display_name) values (h.id, auth.uid(), coalesce(p_display, ''));
+  if n >= 2 then return json_build_object('error', 'That household is full (2 people).'); end if;
+  insert into mise_members (household_id, user_id, display_name) values (h.id, auth.uid(), who);
   return mise_household_json(h);
 end $$;
 
@@ -171,10 +185,21 @@ language sql security definer set search_path = public stable as $$
   limit 1
 $$;
 
+-- Leaving gives the household a new invite code (the old one may have been shared). The last
+-- person to leave closes the household; everything stays on the phones.
 create or replace function mise_leave_household() returns void
-language sql security definer set search_path = public as $$
-  delete from mise_members where user_id = auth.uid()
-$$;
+language plpgsql security definer set search_path = public as $$
+declare hid uuid;
+begin
+  if auth.uid() is null then raise exception 'Not signed in'; end if;
+  for hid in delete from mise_members where user_id = auth.uid() returning household_id loop
+    if exists (select 1 from mise_members where household_id = hid) then
+      update mise_households set invite_code = mise_new_code() where id = hid;
+    else
+      delete from mise_households where id = hid;
+    end if;
+  end loop;
+end $$;
 
 -- Grants: nothing by default, then exactly what the app needs.
 revoke all on mise_households, mise_members, mise_rows, mise_join_attempts from anon, authenticated, public;
@@ -186,6 +211,9 @@ revoke execute on function mise_new_code(), mise_is_member(uuid), mise_household
   mise_leave_household() from public, anon;
 grant execute on function mise_create_household(text, text), mise_join_household(text, text),
   mise_my_household(), mise_leave_household(), mise_is_member(uuid) to authenticated;
+
+-- Internal helpers are not callable from the app (Supabase grants new functions to everyone).
+revoke execute on function mise_new_code(), mise_household_json(mise_households), mise_touch() from authenticated;
 
 -- Tell the API about the new functions straight away (otherwise it can take a minute).
 notify pgrst, 'reload schema';

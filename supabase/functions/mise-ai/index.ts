@@ -108,9 +108,14 @@ const WEEK_TOOL = {
             recipeId: { type: "integer", description: "id of the main dish from the library" },
             sideId: { type: "integer", description: "id of a rice or bread side from the library to cook with a curry, or 0 for none" },
             servings: { type: "integer", description: "Servings to cook, following the kitchen profile (bigger when the cook covers extra meals)" },
+            covers: {
+              type: "array",
+              description: "Later meals this cook also covers as leftovers (e.g. the next day's lunch), within the next three days. Empty when none.",
+              items: { type: "object", properties: { date: { type: "string" }, meal: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] } }, required: ["date", "meal"] },
+            },
             reason: { type: "string", description: "Why this dish, in at most eight words" },
           },
-          required: ["date", "meal", "recipeId", "sideId", "servings", "reason"],
+          required: ["date", "meal", "recipeId", "sideId", "servings", "covers", "reason"],
         },
       },
       summary: { type: "string", description: "One short sentence about the week's balance" },
@@ -123,26 +128,46 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-/** Pulls the JSON object out of a model reply (drops thinking, code fences and chatter). */
+/**
+ * Pulls the first complete JSON object out of a model reply (drops thinking, code fences and
+ * chatter). Braces are matched, skipping any inside strings, so text after the object is ignored.
+ */
 function extract(text: string): unknown {
   const t = text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/```(?:json)?/g, "");
-  const a = t.indexOf("{"), b = t.lastIndexOf("}");
-  if (a < 0 || b <= a) throw new Error("no json");
-  return JSON.parse(t.slice(a, b + 1));
+  let start = t.indexOf("{");
+  while (start >= 0) {
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < t.length; i++) {
+      const ch = t[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        try { return JSON.parse(t.slice(start, i + 1)); } catch { break; }
+      }
+    }
+    start = t.indexOf("{", start + 1);
+  }
+  throw new Error("no json");
 }
 
-/** NVIDIA's live model list, read once per server start. */
-let catalogue: string[] | null = null;
+/** NVIDIA's live model list, refreshed every ten minutes. A failed read is never cached. */
+let catalogue: string[] = [];
+let catalogueAt = 0;
 async function available(): Promise<string[]> {
-  if (catalogue) return catalogue;
+  if (catalogue.length > 0 && Date.now() - catalogueAt < 10 * 60_000) return catalogue;
   try {
     const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` }, signal: AbortSignal.timeout(8000) });
     const d = await r.json();
-    catalogue = (d?.data ?? []).map((m: { id: string }) => m.id);
+    const ids = (d?.data ?? []).map((m: { id: string }) => m.id).filter((x: unknown) => typeof x === "string");
+    if (ids.length > 0) { catalogue = ids; catalogueAt = Date.now(); }
   } catch {
-    catalogue = [];
+    // Keep the last good list (or none); the next request tries again.
   }
-  return catalogue!;
+  return catalogue;
 }
 
 /** The models to try, in order: preferred ones that exist, then (for photos) any image reader. */
@@ -165,11 +190,11 @@ const good: [string | null, string | null] = [null, null];
 
 const retired = new Set<string>();
 
-/** One model, one try (plus one retry if the JSON is unreadable). Throws a short reason. */
+/** One model: one try, plus one retry if the JSON is unreadable or the setting is refused. Throws a short reason. */
 async function tryModel(model: string, messages: unknown[], maxTokens: number, signal: AbortSignal): Promise<Record<string, unknown>> {
   const convo = [...messages];
   let plain = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     let r: Response;
     try {
       r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
@@ -195,7 +220,9 @@ async function tryModel(model: string, messages: unknown[], maxTokens: number, s
       if (r.status === 404 || r.status === 410 || /end of life|not found|no longer|not support|does not support image/i.test(msg)) retired.add(model);
       throw new Error(/not found/i.test(msg) ? "not on this account" : msg.slice(0, 60));
     }
-    const text = String(data?.choices?.[0]?.message?.content ?? "");
+    // Some reasoning models put the answer in reasoning_content when content is empty.
+    const msg = data?.choices?.[0]?.message ?? {};
+    const text = String(msg.content || msg.reasoning_content || "");
     try {
       const out = extract(text) as Record<string, unknown>;
       out._model = model;
@@ -208,11 +235,12 @@ async function tryModel(model: string, messages: unknown[], maxTokens: number, s
 }
 
 /**
- * Asks for one JSON object matching the tool's schema. Three models run at once and the first
- * good answer wins (the others are stopped), so one slow or missing model never holds things
- * up. If all three fail, the next three get the time that is left. Everything finishes within
- * about 100 seconds, inside the app's two-minute wait and Supabase's limit.
+ * Asks for one JSON object matching the tool's schema. One model starts; if it has not answered
+ * within STAGGER_MS (or fails), the next starts too, up to three at once. The first good answer
+ * wins and the rest are stopped, so a slow model never holds things up, and a quick answer costs
+ * one call, not three. Everything finishes within about 100 seconds, inside the app's wait.
  */
+const STAGGER_MS = 15_000;
 async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000, vision = false) {
   const instruction = `Reply with one JSON object only, no other text, matching this JSON schema:\n${JSON.stringify(tool.input_schema)}`;
   const messages: unknown[] = [
@@ -220,30 +248,65 @@ async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL 
     { role: "user", content },
   ];
   const deadline = Date.now() + 100_000;
+  const queue = await candidates(vision);
+  if (queue.length === 0) throw new Error("No AI model is available right now. Try again later.");
   const tried: string[] = [];
-  let queue = await candidates(vision);
-  while (queue.length > 0 && deadline - Date.now() > 12_000) {
-    const batch = queue.slice(0, 3);
-    queue = queue.slice(3).filter((m) => !retired.has(m));
-    const stop = new AbortController();
-    const timer = setTimeout(() => stop.abort(), Math.min(60_000, deadline - Date.now()));
-    try {
-      const out = await Promise.any(batch.map((m) => tryModel(m, messages, maxTokens, stop.signal).catch((e) => {
-        tried.push(`${m.split("/").pop()}: ${e instanceof Error ? e.message : e}`);
-        throw e;
-      })));
-      good[vision ? 1 : 0] = String(out._model);
-      return out;
-    } catch (e) {
-      const reasons = e instanceof AggregateError ? e.errors.map((x) => String(x?.message ?? x)) : [];
-      if (reasons.includes("KEY")) throw new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret.");
-      if (reasons.length > 0 && reasons.every((r) => r === "LIMIT")) throw new Error("NVIDIA's free limit was reached for now. Try again in a minute.");
-    } finally {
-      clearTimeout(timer);
-      stop.abort();
-    }
+  const reasons: string[] = [];
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), deadline - Date.now());
+  try {
+    return await new Promise<Record<string, unknown>>((resolve, reject) => {
+      let running = 0, done = false;
+      let wake: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (done || running > 0 || queue.length > 0 && deadline - Date.now() > 12_000) return;
+        done = true;
+        if (reasons.includes("KEY")) return reject(new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret."));
+        if (reasons.length > 0 && reasons.every((r) => r === "LIMIT")) return reject(new Error("NVIDIA's free limit was reached for now. Try again in a minute."));
+        reject(new Error(tried.length ? `The AI could not answer (${tried.slice(0, 6).join("; ")}). Try again.` : "No AI model is available right now. Try again later."));
+      };
+      const next = () => {
+        clearTimeout(wake);
+        if (done) return;
+        while (queue.length > 0 && retired.has(queue[0])) queue.shift();
+        if (queue.length === 0 || running >= 3 || deadline - Date.now() < 12_000) return finish();
+        const m = queue.shift()!;
+        running++;
+        tryModel(m, messages, maxTokens, stop.signal).then((out) => {
+          if (done) return;
+          done = true;
+          good[vision ? 1 : 0] = m;
+          resolve(out);
+        }, (e) => {
+          running--;
+          const why = e instanceof Error ? e.message : String(e);
+          reasons.push(why);
+          tried.push(`${m.split("/").pop()}: ${why}`);
+          if (why === "KEY") { queue.length = 0; return finish(); }
+          next(); // a failure starts the next model straight away
+        });
+        // No answer yet after a while: start one more alongside.
+        wake = setTimeout(next, STAGGER_MS);
+      };
+      next();
+      // Out of time: no new models; the running ones stop and report, then finish() answers.
+      stop.signal.addEventListener("abort", () => { queue.length = 0; clearTimeout(wake); finish(); });
+    });
+  } finally {
+    clearTimeout(timer);
+    stop.abort();
   }
-  throw new Error(tried.length ? `The AI could not answer (${tried.slice(0, 6).join("; ")}). Try again.` : "No AI model is available right now. Try again later.");
+}
+
+/** A simple daily cap per account, so a stuck loop on a phone cannot run up the bill. */
+const DAILY_CAP = 80;
+const usage = new Map<string, { day: string; n: number }>();
+function overCap(user: string): boolean {
+  const day = new Date().toISOString().slice(0, 10);
+  const u = usage.get(user);
+  if (!u || u.day !== day) { usage.set(user, { day, n: 1 }); return false; }
+  u.n++;
+  return u.n > DAILY_CAP;
 }
 
 Deno.serve(async (req) => {
@@ -252,22 +315,34 @@ Deno.serve(async (req) => {
 
   // Who is asking: the signed-in Mise account.
   const auth = req.headers.get("Authorization") ?? "";
-  const who = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { Authorization: auth, apikey: ANON } });
+  let who: Response;
+  try {
+    who = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { Authorization: auth, apikey: ANON }, signal: AbortSignal.timeout(8000) });
+  } catch {
+    return json({ error: "Mise AI could not check your sign-in. Try again." }, 503);
+  }
   if (!who.ok) return json({ error: "Please sign in again (Settings, Household)." }, 401);
-  const user = await who.json();
+  const user = await who.json().catch(() => ({}));
   const email = String(user?.email ?? "").toLowerCase();
-  if (!ALLOWED.includes(email)) return json({ error: "This account is not set up for AI helpers yet." }, 403);
+  // A listed email counts only once its owner has proved it (signed in with the emailed code).
+  if (!email || !user?.email_confirmed_at || !ALLOWED.includes(email)) return json({ error: "This account is not set up for AI helpers yet." }, 403);
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Bad request" }, 400);
+  if (body.task !== "status" && overCap(String(user?.id ?? email))) return json({ error: "That is a lot of AI for one day. It is back tomorrow." }, 429);
   const kitchen = String(body.kitchen ?? "").trim().slice(0, 3000);
   const SYSTEM = kitchen ? `${HOUSE}\n\nHow this household cooks and eats (follow it closely):\n${kitchen}` : HOUSE;
 
   try {
     switch (body.task) {
       case "photo": {
-        const images = (body.images as { media_type: string; data: string }[] | undefined) ?? [];
+        const images = Array.isArray(body.images) ? body.images as { media_type: unknown; data: unknown }[] : [];
         if (images.length === 0 || images.length > 4) return json({ error: "Send one to four photos." }, 400);
+        // NVIDIA takes inline images up to 180,000 base64 characters each.
+        const okImage = (i: { media_type: unknown; data: unknown }) => i && typeof i.data === "string" && i.data.length > 0 && i.data.length <= 180_000 &&
+          /^[A-Za-z0-9+/=]+$/.test(i.data) && ["image/jpeg", "image/png", "image/webp"].includes(String(i.media_type));
+        if (!images.every(okImage)) return json({ error: "A photo was too large or unreadable. Try again, or use fewer photos." }, 400);
         const content: unknown[] = [{
           type: "text",
           text: `These photos show one recipe (a cookbook page, a handwritten card, a screenshot or a packet). ` +
@@ -282,23 +357,33 @@ Deno.serve(async (req) => {
       case "idea": {
         const request = String(body.prompt ?? "").slice(0, 600);
         if (!request.trim()) return json({ error: "Say what you would like to cook." }, 400);
-        const serves = Number(body.serves ?? 4);
+        const serves = Math.min(24, Math.max(1, Math.round(Number(body.serves) || 4)));
         const text = `Write one reliable, home-cookable recipe for ${serves} servings for this request: "${request}". ` +
           `Use ingredients easy to buy in UAE supermarkets (Lulu, Carrefour, Spinneys). Give exact amounts. ` +
           `Mention in notes any shortcut or swap worth knowing.`;
         return json({ recipe: await ask(SYSTEM, [{ type: "text", text }], RECIPE_TOOL) });
       }
       case "week": {
-        const library = (body.library as unknown[]) ?? [];
+        const arr = (v: unknown, n: number) => Array.isArray(v) ? v.slice(0, n) : [];
+        const library = arr(body.library, 400);
+        const sides = arr(body.sides, 80);
+        const slots = body.slots && typeof body.slots === "object" && !Array.isArray(body.slots) ? body.slots : {};
+        if (library.length === 0 || Object.keys(slots).length === 0) return json({ error: "Nothing to plan: add recipes, or choose empty slots." }, 400);
+        const servings = Math.min(24, Math.max(0, Math.round(Number(body.servings) || 0)));
+        const noCook = arr(body.noCook, 14).map(String).join(", ");
         const text = `Plan the empty slots of this week from the library only.\n` +
-          `Days and meals to fill (ISO date: meals): ${JSON.stringify(body.slots)}\n` +
-          `Already planned this week: ${JSON.stringify(body.planned ?? [])}\n` +
-          `Library (id, title, dishType, cuisine, lastHad, proteins): ${JSON.stringify(library)}\n` +
+          `Days and meals to fill (ISO date: meals): ${JSON.stringify(slots)}\n` +
+          `Already planned this week: ${JSON.stringify(arr(body.planned, 60))}\n` +
+          `Main dishes (id, title, dishType, cuisine, lastHad, proteins): ${JSON.stringify(library)}\n` +
+          `Sides, rice and breads (id, title): ${JSON.stringify(sides)}\n` +
+          (noCook ? `No cooking on (weekday:meal): ${noCook}\n` : "") +
+          (servings ? `Usual servings for one cook: ${servings}\n` : "") +
           `Wishes for this week: ${String(body.wishes ?? "none").slice(0, 400)}\n` +
           `Rules: follow the household's profile first (weekly pattern, protein rotation, sides, servings). ` +
           `Do not repeat a main dish in the week, and count what is already planned. Prefer dishes not had for a while. ` +
-          `For a curry or gravy dish, set sideId to a rice or bread dish from the library (Rice, Breakfast or bread types), otherwise 0. ` +
-          `Leave a slot out when the profile says there is no cooking then. Use only ids from the library and only the given slots.`;
+          `For a curry or gravy dish, set sideId to one of the sides listed, otherwise 0. ` +
+          `When a cook also feeds later meals (for example the next day's lunch, or two lunches before a no-cook evening), list them in covers and raise servings to match. ` +
+          `Use only ids from the lists and only the given slots.`;
         return json(await ask(SYSTEM, [{ type: "text", text }], WEEK_TOOL, 2500));
       }
       case "status": {
@@ -308,7 +393,7 @@ Deno.serve(async (req) => {
           const results = await Promise.all(list.map(async (m) => {
             const t0 = Date.now();
             try {
-              await tryModel(m, [{ role: "user", content: 'Reply with {"ok": true}' }], 20, AbortSignal.timeout(20_000));
+              await tryModel(m, [{ role: "user", content: 'Reply with {"ok": true}' }], 200, AbortSignal.timeout(20_000));
               return { model: m, ok: true, ms: Date.now() - t0 };
             } catch (e) {
               return { model: m, ok: false, why: e instanceof Error ? e.message : String(e) };

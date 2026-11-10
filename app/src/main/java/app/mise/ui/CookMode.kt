@@ -61,6 +61,19 @@ fun CookModeScreen(id: Long, servings: Int?, choices: List<String>?, onClose: ()
     var doneIngs by rememberSaveable(id) { mutableStateOf(setOf<Int>()) }
     var doneSteps by rememberSaveable(id) { mutableStateOf(setOf<Int>()) }
     val tick = Haptic.rememberTick()
+    var askLeave by remember { mutableStateOf(false) }
+    // Back mid-cook asks first, so a stray swipe never loses your place.
+    val started = doneIngs.isNotEmpty() || doneSteps.isNotEmpty()
+    androidx.activity.compose.BackHandler(enabled = started) { askLeave = true }
+    if (askLeave) {
+        ConfirmDialog(
+            title = "Stop cooking?",
+            body = "Your ticked ingredients and steps are cleared.",
+            confirm = "Stop", dismiss = "Keep cooking",
+            onConfirm = { askLeave = false; onClose() },
+            onDismiss = { askLeave = false },
+        )
+    }
 
     Column(Modifier.fillMaxSize()) {
         val r = state as? Recipe
@@ -68,7 +81,7 @@ fun CookModeScreen(id: Long, servings: Int?, choices: List<String>?, onClose: ()
             Modifier.fillMaxWidth().statusBarsPadding().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconTile(MiseIcons.Close, "Close cook mode", onClick = onClose)
+            IconTile(MiseIcons.Close, "Close cook mode", onClick = { if (started) askLeave = true else onClose() })
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("COOKING · SCREEN STAYS ON", style = Mise.type.labelS, color = c.text2)
@@ -94,7 +107,7 @@ fun CookModeScreen(id: Long, servings: Int?, choices: List<String>?, onClose: ()
                     }
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        Scaling.scaledText(ing.qty, ing.unit, r.baseServings, serv, ing.name, r.exact),
+                        Scaling.scaledText(ing.qty, ing.unit, r.baseServings, serv, ing.name, r.exact, r.ratioLocked),
                         style = Mise.type.number.copy(fontSize = 17.sp), color = if (done) c.text2 else c.text,
                     )
                 }

@@ -21,7 +21,7 @@ class MigrationTest {
     @get:Rule
     val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), MiseDb::class.java)
 
-    @Test fun threeToFour() {
+    @Test fun threeToCurrent() {
         helper.createDatabase("mig", 3).apply {
             execSQL(
                 "INSERT INTO recipes (id, title, cuisine, tags, baseServings, prepMins, cookMins, notes, source, createdAt, updatedAt) " +
@@ -40,6 +40,13 @@ class MigrationTest {
             assertEquals("to_check", c.getString(0))
             assertEquals("", c.getString(1))
             assertEquals("", c.getString(2))
+        }
+        // Version 5: ticks remember the unit of the amount bought.
+        db.execSQL("INSERT INTO list_checks (weekStart, itemKey, checkedAt) VALUES ('2026-11-09', 'rice', 0)")
+        db.query("SELECT unit, amount FROM list_checks WHERE itemKey = 'rice'").use { c ->
+            c.moveToFirst()
+            assertEquals("", c.getString(0))
+            assertEquals(0.0, c.getDouble(1), 0.0)
         }
         room.close()
     }

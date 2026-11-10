@@ -75,7 +75,7 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
                         Text(if (Prefs.defaultServings == 0) "Each recipe's own" else "New dishes start at this", style = Mise.type.bodyS, color = c.text2)
                     }
                     Stepper(
-                        Prefs.defaultServings, { Prefs.chooseDefaultServings(it) }, min = 0, max = 12, label = "servings",
+                        Prefs.defaultServings, { app.mise.data.Shared.setServings(ctx, it) }, min = 0, max = 12, label = "servings",
                         display = if (Prefs.defaultServings == 0) "–" else Prefs.defaultServings.toString(),
                     )
                 }
@@ -84,7 +84,24 @@ fun SettingsScreen(onBack: () -> Unit, onHousehold: () -> Unit) {
                     Text("Week starts on", style = Mise.type.body, color = c.text, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
                     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(DayOfWeek.MONDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY).forEach { d ->
-                            MiseChip(d.getDisplayName(TextStyle.FULL, Locale.UK), Prefs.weekStart == d) { Prefs.chooseWeekStart(d) }
+                            MiseChip(d.getDisplayName(TextStyle.FULL, Locale.UK), Prefs.weekStart == d) { app.mise.data.Shared.setWeekStart(ctx, d) }
+                        }
+                    }
+                }
+                Divider()
+                Column(Modifier.padding(vertical = 12.dp)) {
+                    Text("No cooking on", style = Mise.type.body, color = c.text, modifier = Modifier.padding(start = 16.dp))
+                    Text("Evenings you eat out or are away. Mise AI plans the day before to cover the next lunch.", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    androidx.compose.foundation.layout.FlowRow(
+                        Modifier.padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        DayOfWeek.entries.forEach { d ->
+                            val slot = "${d.name}:dinner"
+                            MiseChip(d.getDisplayName(TextStyle.SHORT, Locale.UK), slot in Prefs.noCook) {
+                                app.mise.data.Shared.setNoCook(ctx, if (slot in Prefs.noCook) Prefs.noCook - slot else Prefs.noCook + slot)
+                            }
                         }
                     }
                 }
@@ -201,8 +218,7 @@ private fun ImportCard() {
     val result by repo.importResult.collectAsState()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val text = runCatching { context.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
-        if (text == null) Toasts.show("Could not open that file.") else repo.importFile(text)
+        repo.importFile(context, uri)
     }
     Card {
         NavRow(
@@ -277,7 +293,7 @@ private fun AiCheckCard() {
             busy = true; result = null
             scope.launch {
                 result = try {
-                    val j = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.mise.sync.Supa.ai(org.json.JSONObject().put("task", "status")) }
+                    val j = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.mise.data.Ai.call(org.json.JSONObject().put("task", "status")) }
                     fun names(k: String): List<String> = j.optJSONArray(k)?.let { arr -> (0 until arr.length()).map { arr.getString(it).substringAfter('/') } } ?: emptyList()
                     val text = names("text"); val vision = names("vision")
                     val failed = j.optJSONArray("failed")?.let { arr ->
@@ -318,7 +334,7 @@ private fun KitchenSheet(onDismiss: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             PrimaryButton("Save", {
                 val t = text
-                scope.launch { app.mise.data.Kitchen.save(ctx, t) }
+                RecipeRepo.get(ctx).scope.launch { app.mise.data.Kitchen.save(ctx, t) }
                 Toasts.show("Saved. Mise AI will follow it.")
                 onDismiss()
             }, Modifier.fillMaxWidth(), enabled = text.isNotBlank() && text != Prefs.kitchen)

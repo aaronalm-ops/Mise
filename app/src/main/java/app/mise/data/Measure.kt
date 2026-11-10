@@ -30,10 +30,18 @@ enum class Measure(val key: String, val label: String, val kind: Kind) {
 
     enum class Kind { MASS, VOLUME, SPOON, COUNT, PART, WHOLE, NONE }
 
+    /** "2 cups", "3 cloves"; symbols (g, ml, tsp) never change. */
+    fun labelFor(v: Double): String = if (v <= 1.0 + 1e-9) label else when (this) {
+        CUP -> "cups"; CLOVE -> "cloves"; CAN -> "cans"; PACK -> "packs"; BUNCH -> "bunches"; SPRIG -> "sprigs"; PINCH -> "pinches"
+        else -> label
+    }
+
     companion object {
         /** The units offered in pickers (NONE is only a placeholder). */
         val choices = entries.filter { it != NONE }
-        fun from(key: String?): Measure = entries.firstOrNull { it.key == key } ?: if (key.isNullOrEmpty()) NONE else G
+        fun from(key: String?): Measure = entries.firstOrNull { it.key == key }
+            ?: key?.trim()?.trimEnd('.')?.takeIf { it.isNotEmpty() }?.let { fromWord(it) ?: fromWord(it.lowercase().removeSuffix("s")) }
+            ?: NONE
 
         private val words = mapOf(
             "g" to G, "gm" to G, "gms" to G, "gram" to G, "grams" to G, "gr" to G,
@@ -57,7 +65,9 @@ enum class ScaleClass { LINEAR, SEASONING, WHOLE_SPICE, FAT, LIQUID, EGG }
 object Scaling {
 
     private val wholeSpice = listOf("cardamom", "cinnamon stick", "bay leaf", "bay leaves", "peppercorn", "star anise", "dry red chilli", "dried red chilli", "whole garam masala", "whole spice")
-    private val seasoning = listOf("salt", "powder", "masala", "paste", "sauce", "vinegar", "chilli", "chili", "garlic", "ginger", "pepper", "paprika", "cumin", "turmeric", "seasoning", "herbs", "kasuri methi", "msg", "flakes", "seeds", "mustard", "cayenne", "oregano", "sriracha")
+    private val seasoning = listOf("salt", "powder", "masala", "paste", "sauce", "vinegar", "chilli", "chili", "pepper", "paprika", "cumin", "turmeric", "seasoning", "herbs", "kasuri methi", "msg", "flakes", "seeds", "mustard", "cayenne", "oregano", "sriracha")
+    /** Vegetables named "pepper" are produce, not seasoning. */
+    private val vegPepper = listOf("bell pepper", "red pepper", "green pepper", "yellow pepper", "capsicum")
     private val fat = listOf("oil", "ghee", "butter")
     private val liquid = listOf("water", "stock", "broth")
 
@@ -67,6 +77,7 @@ object Scaling {
             n == "egg" || n == "eggs" || n.startsWith("egg ") -> ScaleClass.EGG
             unit != Measure.CLOVE && (n == "cloves" || n == "clove") -> ScaleClass.WHOLE_SPICE
             wholeSpice.any { n.contains(it) } -> ScaleClass.WHOLE_SPICE
+            vegPepper.any { n.contains(it) } -> ScaleClass.LINEAR
             liquid.any { n.contains(it) } && !n.contains("coconut") -> ScaleClass.LIQUID
             fat.any { Regex("\\b$it\\b").containsMatchIn(n) } && !n.contains("peanut") -> ScaleClass.FAT
             seasoning.any { n.contains(it) } -> ScaleClass.SEASONING
@@ -79,11 +90,13 @@ object Scaling {
      * frying fat grow more slowly (doubling a curry does not double the cloves), cooking liquid a
      * little slower, eggs stay whole. Baking, desserts and drinks always scale exactly.
      */
-    fun scale(qty: Double?, unit: Measure, baseServings: Int, servings: Int, name: String = "", exact: Boolean = false): Pair<Double?, Measure> {
+    fun scale(qty: Double?, unit: Measure, baseServings: Int, servings: Int, name: String = "", exact: Boolean = false, ratioLocked: Boolean = false): Pair<Double?, Measure> {
         if (qty == null || unit == Measure.TO_TASTE) return null to unit
         val f = servings.toDouble() / baseServings.coerceAtLeast(1)
         if (f == 1.0) return normalise(qty, unit)
-        val cls = if (exact) ScaleClass.LINEAR else classify(name, unit)
+        var cls = if (exact) ScaleClass.LINEAR else classify(name, unit)
+        // Rice cooked by absorption needs its water in step with the rice.
+        if (ratioLocked && cls == ScaleClass.LIQUID) cls = ScaleClass.LINEAR
         val v = when (cls) {
             ScaleClass.LINEAR -> qty * f
             ScaleClass.SEASONING -> qty * f.pow(0.8)
@@ -139,20 +152,23 @@ object Scaling {
     }
 
     /** "750 g", "1.5 kg", "1½ tbsp", "⅛ tsp", "4½ pc", "¼ bunch", "to taste". */
-    fun format(qty: Double?, unit: Measure): String {
-        if (unit == Measure.TO_TASTE) return "to taste"
+    fun format(qty: Double?, unit0: Measure): String {
+        if (unit0 == Measure.TO_TASTE) return "to taste"
         if (qty == null) return ""
-        if (unit == Measure.TSP && qty < 0.1) return "1 pinch"
-        val v = round(qty, unit)
+        if (unit0 == Measure.TSP && qty < 0.1) return "1 pinch"
+        // Round, then move up a unit if rounding crossed it (999 g -> 1 kg).
+        val (n0, unit) = normalise(round(qty, unit0), unit0)
+        var v = round(n0, unit)
+        if ((unit == Measure.G || unit == Measure.ML) && v <= 0.0 && qty > 0) v = 0.1
         val number = when (unit.kind) {
             Measure.Kind.SPOON, Measure.Kind.COUNT, Measure.Kind.PART -> fraction(v)
             else -> plain(v)
         }
-        return if (unit == Measure.NONE || unit == Measure.PC) number else "$number ${unit.label}"
+        return if (unit == Measure.NONE || unit == Measure.PC) number else "$number ${unit.labelFor(v)}"
     }
 
-    fun scaledText(qty: Double?, unit: Measure, baseServings: Int, servings: Int, name: String = "", exact: Boolean = false): String {
-        val (v, u) = scale(qty, unit, baseServings, servings, name, exact)
+    fun scaledText(qty: Double?, unit: Measure, baseServings: Int, servings: Int, name: String = "", exact: Boolean = false, ratioLocked: Boolean = false): String {
+        val (v, u) = scale(qty, unit, baseServings, servings, name, exact, ratioLocked)
         return format(v, u)
     }
 
@@ -214,6 +230,13 @@ object Scaling {
     fun parseLine(line: String): ParsedLine? {
         val clean = line.trim().trimStart('-', '•', '*', '·').trim()
         if (clean.isEmpty()) return null
+        // "1-2 green chillies": take the larger number and keep the range in the note.
+        val range = Regex("^([0-9]+(?:\\.[0-9]+)?)\\s*[-–]\\s*([0-9]+(?:\\.[0-9]+)?)\\s+(.*)$").find(clean)
+        if (range != null) {
+            val inner = parseLine(range.groupValues[2] + " " + range.groupValues[3]) ?: return null
+            val r = range.groupValues[1] + " to " + range.groupValues[2]
+            return inner.copy(note = listOf(r, inner.note).filter { it.isNotBlank() }.joinToString(", "))
+        }
         val m = Regex("^([0-9][0-9.,/ ]*|[⅛¼⅓½⅔¾]|[0-9]+[⅛¼⅓½⅔¾])\\s*([A-Za-z]+)?\\.?\\s+(.*)$").find(clean)
         var qty = ""
         var unit = Measure.NONE
@@ -248,6 +271,8 @@ object Units {
     fun guessUnit(name: String): Measure {
         val n = name.lowercase()
         return when {
+            Regex("\\b(powder|paste|sauce|seeds?|flakes?|masala|oil)\\b").containsMatchIn(n) -> Measure.G
+            n == "cloves" || n == "clove" -> Measure.PC
             n.contains("garlic") -> Measure.CLOVE
             countable.any { n.contains(it) } -> Measure.PC
             else -> Measure.G

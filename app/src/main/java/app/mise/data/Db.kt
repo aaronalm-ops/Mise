@@ -156,6 +156,8 @@ data class ListCheckEntity(
     val checkedAt: Long,
     @ColumnInfo(defaultValue = "0") val amount: Double = 0.0,
     @ColumnInfo(defaultValue = "''") val checkedBy: String = "",
+    /** Unit of [amount] (Measure key), so a later comparison never mixes pieces and grams. */
+    @ColumnInfo(defaultValue = "''") val unit: String = "",
 )
 
 /** A one-off item typed onto a week's list (milk, tissues), in its aisle. */
@@ -366,6 +368,9 @@ interface RecipeDao {
     @Query("SELECT DISTINCT date FROM plan_entries WHERE date < :before ORDER BY date DESC LIMIT 120")
     suspend fun pastPlanDates(before: String): List<String>
 
+    @Query("SELECT * FROM plan_notes WHERE date BETWEEN :from AND :to")
+    suspend fun notesRange(from: String, to: String): List<PlanNoteEntity>
+
     @Query("SELECT * FROM plan_notes WHERE id = :id")
     suspend fun note(id: Long): PlanNoteEntity?
 
@@ -396,12 +401,15 @@ interface RecipeDao {
     suspend fun isChecked(week: String, key: String): Int
 
     /** This week's extras, plus unbought ones carried over from earlier weeks. */
-    @Query("SELECT * FROM list_extras WHERE weekStart = :week OR (weekStart < :week AND checked = 0) ORDER BY createdAt")
-    fun observeExtras(week: String): Flow<List<ListExtraEntity>>
+    @Query("SELECT * FROM list_extras WHERE weekStart = :week OR (weekStart < :week AND weekStart >= :since AND checked = 0) ORDER BY createdAt")
+    fun observeExtras(week: String, since: String): Flow<List<ListExtraEntity>>
 
     /** Names added by hand before, most recent first, for the quick chips when adding. */
     @Query("SELECT name FROM list_extras GROUP BY name COLLATE NOCASE ORDER BY MAX(createdAt) DESC LIMIT :n")
     fun observeRecentExtraNames(n: Int): Flow<List<String>>
+
+    @Query("SELECT * FROM list_extras WHERE weekStart = :week")
+    suspend fun extrasForWeek(week: String): List<ListExtraEntity>
 
     @Query("SELECT * FROM list_extras WHERE id = :id")
     suspend fun extra(id: Long): ListExtraEntity?
@@ -460,6 +468,14 @@ interface SyncDao {
     @Query("DELETE FROM sync_deletes")
     suspend fun clearTombs()
 
+    /** Links that never reached the server (made before joining): dropped so joining can match by name. */
+    @Query("DELETE FROM sync_rows WHERE remoteAt = ''")
+    suspend fun dropUnshared()
+
+    /** A row the server refused on its own: kept, but no longer retried every few seconds. */
+    @Query("UPDATE sync_rows SET dirty = 0 WHERE kind = :kind AND localKey = :key")
+    suspend fun park(kind: String, key: String)
+
     @Query("SELECT id FROM recipes")
     suspend fun recipeIds(): List<Long>
 
@@ -475,8 +491,14 @@ interface SyncDao {
     @Query("SELECT id FROM list_extras")
     suspend fun extraIds(): List<Long>
 
-    @Query("SELECT nameKey FROM ingredients WHERE aisle != '' OR stapleChoice >= 0 OR aliasOf != ''")
-    suspend fun ingredientKeys(): List<String>
+    @Query("SELECT nameKey FROM ingredients WHERE aisle != ''")
+    suspend fun aisleKeys(): List<String>
+
+    @Query("SELECT nameKey FROM ingredients WHERE stapleChoice >= 0")
+    suspend fun levelKeys(): List<String>
+
+    @Query("SELECT nameKey FROM ingredients WHERE aliasOf != ''")
+    suspend fun aliasKeys(): List<String>
 }
 
 @Database(
@@ -486,7 +508,7 @@ interface SyncDao {
         PlanEntryEntity::class, ListCheckEntity::class, ListExtraEntity::class,
         SyncRowEntity::class, SyncDeleteEntity::class, PlanNoteEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class MiseDb : RoomDatabase() {
@@ -560,7 +582,14 @@ abstract class MiseDb : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        /** v0.9: ticks remember the unit of the amount they were ticked at. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `list_checks` ADD COLUMN `unit` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
         /**
          * Records a local change so it is shared with the household on the next sync. Call it in
@@ -573,7 +602,7 @@ abstract class MiseDb : RoomDatabase() {
                 val uid = when (kind) {
                     // Ticks and ingredient settings use the same id on every phone, so two
                     // phones changing the same item meet in one shared row.
-                    "check", "ingredient", "setting" -> key
+                    "check", "ingredient", "ing_aisle", "ing_level", "ing_alias", "setting" -> key
                     else -> java.util.UUID.randomUUID().toString()
                 }
                 d.put(SyncRowEntity(kind, key, uid, 1))

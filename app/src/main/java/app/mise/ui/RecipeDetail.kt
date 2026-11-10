@@ -92,6 +92,7 @@ private fun RecipeBody(r: Recipe, initialServings: Int?, initialChoices: List<St
     var choiceText by rememberSaveable(r.id) { mutableStateOf(Choices.encode(initialChoices ?: Choices.decode("", r))) }
     val choices = Choices.decode(choiceText, r)
     var addToPlan by remember { mutableStateOf(false) }
+    val fromPlan = initialServings != null
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
@@ -183,18 +184,24 @@ private fun RecipeBody(r: Recipe, initialServings: Int?, initialChoices: List<St
         Column(Modifier.fillMaxWidth().background(c.surface).navigationBarsPadding()) {
             Divider()
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(
-                    Modifier.heightIn(min = 52.dp).background(c.surface, PillShape)
-                        .border(BorderStroke(1.dp, c.line), PillShape)
-                        .clickable(role = Role.Button, onClickLabel = "Start cooking") { onCook(servings, choices) }
-                        .padding(horizontal = 18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(MiseIcons.Cook, contentDescription = null, tint = c.text, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Cook", style = Mise.type.bodyM, color = c.text)
+                if (fromPlan) {
+                    // Opened from the plan: it is already planned, so cooking leads.
+                    GhostButton("Add again", { addToPlan = true })
+                    PrimaryButton("Start cooking", { onCook(servings, choices) }, Modifier.weight(1f))
+                } else {
+                    Row(
+                        Modifier.heightIn(min = 52.dp).background(c.surface, PillShape)
+                            .border(BorderStroke(1.dp, c.line), PillShape)
+                            .clickable(role = Role.Button, onClickLabel = "Start cooking") { onCook(servings, choices) }
+                            .padding(horizontal = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(MiseIcons.Cook, contentDescription = null, tint = c.text, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Cook", style = Mise.type.bodyM, color = c.text)
+                    }
+                    PrimaryButton("Add to plan", { addToPlan = true }, Modifier.weight(1f))
                 }
-                PrimaryButton("Add to plan", { addToPlan = true }, Modifier.weight(1f))
             }
         }
     }
@@ -229,7 +236,7 @@ private fun IngredientLine(ing: Ingredient, isSwap: Boolean, r: Recipe, servings
         }
         Spacer(Modifier.width(12.dp))
         Text(
-            Scaling.scaledText(ing.qty, ing.unit, r.baseServings, servings, ing.name, r.exact),
+            Scaling.scaledText(ing.qty, ing.unit, r.baseServings, servings, ing.name, r.exact, r.ratioLocked),
             style = Mise.type.number, color = c.text, textAlign = TextAlign.End,
         )
     }

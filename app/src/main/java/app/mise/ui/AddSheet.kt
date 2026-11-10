@@ -52,8 +52,11 @@ fun AddSheet(onDismiss: () -> Unit, onNewRecipe: () -> Unit, onListItem: () -> U
             AddChoice(MiseIcons.Calendar, "Dish on the plan", "Pick a day and a recipe", onClick = onPlanDish)
             AddChoice(MiseIcons.Library, "New recipe", "Write it with servings and swaps", onClick = onNewRecipe)
             AddChoice(MiseIcons.List, "Item on the grocery list", "Milk, tissues, anything extra", onClick = onListItem)
-            AddChoice(MiseIcons.Camera, "Recipe from a photo", "Mise AI reads a page or a card", onClick = onPhoto)
-            AddChoice(MiseIcons.Spark, "Recipe from an idea", "Mise AI writes it for you", onClick = onIdea)
+            // Hidden for an account the server has refused Mise AI to (shown signed out: it leads to sign-in).
+            if (!app.mise.data.Ai.available || app.mise.data.Prefs.aiAllowed) {
+                AddChoice(MiseIcons.Camera, "Recipe from a photo", "Mise AI reads a page or a card", onClick = onPhoto)
+                AddChoice(MiseIcons.Spark, "Recipe from an idea", "Mise AI writes it for you", onClick = onIdea)
+            }
         }
     }
 }

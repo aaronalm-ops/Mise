@@ -73,7 +73,8 @@ data class EditorState(
         private fun ingsFrom(a: JSONArray?): List<EIng> =
             if (a == null) emptyList() else (0 until a.length()).map { n ->
                 val o = a.getJSONObject(n)
-                EIng(name = o.optString("name"), qty = o.optString("qty"), unit = o.optString("unit", Measure.G.key), note = o.optString("note"), showNote = o.optString("note").isNotBlank())
+                fun str(k: String) = o.opt(k)?.takeUnless { it == JSONObject.NULL }?.toString().orEmpty()
+                EIng(name = str("name"), qty = str("qty"), unit = str("unit"), note = str("note"), showNote = str("note").isNotBlank())
             }
 
         fun fromJson(json: String): EditorState {

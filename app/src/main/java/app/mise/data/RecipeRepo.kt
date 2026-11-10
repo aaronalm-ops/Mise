@@ -15,7 +15,16 @@ import kotlinx.coroutines.withContext
 /** All recipe reads and writes. Writes run on [scope] so leaving a screen never cancels a save. */
 class RecipeRepo private constructor(private val db: MiseDb) {
     private val dao = db.recipes()
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * App-wide scope for writes. A failure is logged and shown as a short message instead of
+     * closing the app (for example a dish planned while the other phone deleted its recipe).
+     */
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+            android.util.Log.w("Mise", "Background write failed", e)
+            app.mise.ui.Toasts.show("That did not save. Try again.")
+        },
+    )
 
     /** The last import's outcome, kept here so it survives leaving Settings. */
     private val _importResult = MutableStateFlow<String?>(null)
@@ -82,7 +91,8 @@ class RecipeRepo private constructor(private val db: MiseDb) {
      * An amount that cannot be read is kept in the ingredient's note rather than lost; a typed
      * amount with no unit gets a sensible one (pieces for onions, grams otherwise).
      */
-    suspend fun save(s: EditorState, source: String = "manual", track: Boolean = true): Long = withContext(Dispatchers.IO) {
+    /** Saves a recipe in one transaction; [link] runs inside it too (sync records its link there). */
+    suspend fun save(s: EditorState, source: String = "manual", track: Boolean = true, link: (suspend (Long) -> Unit)? = null): Long = withContext(Dispatchers.IO) {
         db.withTransaction {
             val now = System.currentTimeMillis()
             val base = RecipeEntity(
@@ -130,7 +140,24 @@ class RecipeRepo private constructor(private val db: MiseDb) {
             dao.insertRecipeIngredients(rows)
             dao.insertSteps(s.steps.map { it.text.trim() }.filter { it.isNotEmpty() }.mapIndexed { n, t -> StepEntity(recipeId = id, position = n, text = t) })
             if (track) MiseDb.mark(db, "recipe", id.toString())
+            link?.invoke(id)
             id
+        }
+    }
+
+    /** Reads the picked file off the main thread (it may be downloading from Drive), then imports it. */
+    fun importFile(context: Context, uri: android.net.Uri) {
+        if (_importing.value) return
+        _importing.value = true
+        scope.launch {
+            val text = runCatching { context.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
+            if (text == null) {
+                _importResult.value = "Could not open that file."
+                _importing.value = false
+            } else {
+                _importing.value = false
+                importFile(text)
+            }
         }
     }
 
@@ -140,7 +167,7 @@ class RecipeRepo private constructor(private val db: MiseDb) {
      * from the same source that is still To check (never reviewed) is replaced with the new
      * version; anything you have reviewed or edited is left alone. One unreadable recipe does
      * not stop the rest. Titles listed under "retire" (merged duplicates) are removed if never
- * reviewed. Importing the same file twice is safe.
+     * reviewed. Importing the same file twice is safe.
      */
     fun importFile(json: String) {
         if (_importing.value) return
@@ -188,6 +215,8 @@ class RecipeRepo private constructor(private val db: MiseDb) {
                     if (failed > 0) add("$failed could not be read")
                     if (isEmpty()) add("Nothing new in this file")
                 }.joinToString(", ") + "."
+            } catch (e: org.json.JSONException) {
+                "That file is not a Mise recipe file."
             } catch (e: Exception) {
                 "Could not import that file. " + (e.message ?: "")
             }
@@ -219,14 +248,14 @@ class RecipeRepo private constructor(private val db: MiseDb) {
     }
 
     /**
-     * The unfinished edit of a recipe, if there is one and it is newer than the recipe itself.
-     * An older draft (the recipe was changed since, here or on the other phone) is dropped.
+     * The unfinished edit of a recipe, if there is one. It is never dropped silently: when the
+     * recipe was saved again since, [ResumedDraft.changedElsewhere] lets the editor ask.
      */
-    suspend fun draftForRecipe(recipeId: Long): Pair<Long, EditorState>? = withContext(Dispatchers.IO) {
+    suspend fun draftForRecipe(recipeId: Long): ResumedDraft? = withContext(Dispatchers.IO) {
         val d = dao.draftForRecipe(recipeId) ?: return@withContext null
         val r = dao.recipe(recipeId)
-        if (r != null && r.updatedAt > d.updatedAt) { dao.deleteDraft(d.id); return@withContext null }
-        runCatching { EditorState.fromJson(d.json) }.getOrNull()?.let { d.id to it }
+        val state = runCatching { EditorState.fromJson(d.json) }.getOrNull() ?: return@withContext null
+        ResumedDraft(d.id, state, changedElsewhere = r != null && r.updatedAt > d.updatedAt)
     }
 
     /** Writes the editor to the drafts table; returns the draft id (new or existing). */
@@ -241,6 +270,9 @@ class RecipeRepo private constructor(private val db: MiseDb) {
     }
 
     suspend fun deleteDraft(id: Long) = withContext(Dispatchers.IO) { dao.deleteDraft(id) }
+
+    /** An unfinished edit; [changedElsewhere] when the recipe was saved again since (here or on the other phone). */
+    data class ResumedDraft(val id: Long, val state: EditorState, val changedElsewhere: Boolean)
 
     companion object {
         @Volatile private var instance: RecipeRepo? = null

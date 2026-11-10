@@ -19,6 +19,11 @@ data class Recipe(
 ) {
     /** Exact-measure dishes (baking, desserts, drinks) scale every amount in a straight line. */
     val exact: Boolean get() = dishType in Tags.linearTypes
+
+    /** Rice cooked by absorption: water and stock keep their ratio to the rice when scaled. */
+    val ratioLocked: Boolean
+        get() = dishType == "Rice" || (ingredients + slots.flatMap { s -> s.options.flatMap { it.ingredients } })
+            .any { Names.keyOf(it.name).let { k -> k == "rice" || k == "basmati rice" } }
 }
 
 object RecipeStatus {
@@ -69,7 +74,8 @@ object Choices {
 
     fun decode(raw: String, recipe: Recipe): List<String> {
         if (raw.isBlank()) return recipe.slots.map { s -> (s.options.firstOrNull { it.isDefault } ?: s.options.firstOrNull())?.label ?: "" }
-        if (!raw.contains(SEP) && raw.matches(Regex("[0-9,]+"))) {
+        val isLabel = recipe.slots.size == 1 && recipe.slots[0].options.any { it.label == raw }
+        if (!isLabel && !raw.contains(SEP) && raw.matches(Regex("[0-9,]+"))) {
             val idx = raw.split(',').mapNotNull { it.toIntOrNull() }
             return recipe.slots.mapIndexed { i, s -> s.options.getOrNull(idx.getOrNull(i) ?: -1)?.label ?: (s.options.firstOrNull { it.isDefault } ?: s.options.firstOrNull())?.label ?: "" }
         }

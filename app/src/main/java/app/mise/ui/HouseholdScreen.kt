@@ -106,7 +106,7 @@ fun HouseholdScreen(onBack: () -> Unit) {
             runCatching { withContext(Dispatchers.IO) { householdOf(Supa.rpc("mise_my_household")) } }
                 .onSuccess { j ->
                     if (j != null) {
-                        Supa.setHousehold(j)
+                        Supa.refreshHousehold(j)
                         val arr = j.optJSONArray("members")
                         members = if (arr == null) emptyList() else (0 until arr.length()).map { arr.getString(it) }
                     }
@@ -150,6 +150,7 @@ fun HouseholdScreen(onBack: () -> Unit) {
                     onCreate = { name ->
                         act {
                             val j = JSONObject(Supa.rpc("mise_create_household", JSONObject().put("p_name", name).put("p_display", Supa.displayName)))
+                            if (j.has("error")) throw IllegalStateException(j.getString("error"))
                             Supa.setHousehold(j)
                             SyncEngine.joinAndMerge()
                         }
@@ -157,12 +158,14 @@ fun HouseholdScreen(onBack: () -> Unit) {
                     onJoin = { code ->
                         act {
                             val j = JSONObject(Supa.rpc("mise_join_household", JSONObject().put("p_code", code).put("p_display", Supa.displayName)))
+                            // Refusals come back as {"error": "..."} so the try is still counted.
+                            if (j.has("error")) throw IllegalStateException(j.getString("error"))
                             Supa.setHousehold(j)
                             SyncEngine.joinAndMerge()
                             info = "Joined. Recipes with the same name were matched, so nothing is doubled."
                         }
                     },
-                    onSignOut = { act { SyncEngine.clearBookkeeping(); Supa.signOut() } },
+                    onSignOut = { act { SyncEngine.stopAndWait(); Supa.signOut() } },
                 )
                 else -> {
                     Card {
@@ -204,7 +207,7 @@ fun HouseholdScreen(onBack: () -> Unit) {
                     PrimaryButton("Sync now", { SyncEngine.poke(); Toasts.show("Syncing") }, Modifier.fillMaxWidth())
                     Text("Signed in as ${Supa.email ?: ""}", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 16.dp, bottom = 8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GhostButton("Sign out", { act { SyncEngine.clearBookkeeping(); Supa.signOut() } }, Modifier.weight(1f), enabled = !busy)
+                        GhostButton("Sign out", { act { SyncEngine.stopAndWait(); Supa.signOut() } }, Modifier.weight(1f), enabled = !busy)
                         GhostButton("Leave household", { askLeave = true }, Modifier.weight(1f), danger = true, enabled = !busy)
                     }
                     Text("Either way, everything stays on this phone.", style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
@@ -223,9 +226,9 @@ fun HouseholdScreen(onBack: () -> Unit) {
             onConfirm = {
                 askLeave = false
                 act {
+                    SyncEngine.stopAndWait()
                     Supa.rpc("mise_leave_household")
                     Supa.setHousehold(null)
-                    SyncEngine.clearBookkeeping()
                 }
             },
             onDismiss = { askLeave = false },

@@ -2,6 +2,7 @@ package app.mise.data
 
 import android.content.Context
 import androidx.room.withTransaction
+import kotlinx.coroutines.launch
 
 /**
  * The kitchen profile: how this household plans and eats, in plain words. Mise AI reads it for
@@ -24,7 +25,47 @@ object Kitchen {
     /** Saves the profile on this phone and shares it with the household. */
     suspend fun save(context: Context, text: String) {
         val db = MiseDb.get(context)
-        Prefs.storeKitchen(text.trim())
-        db.withTransaction { MiseDb.mark(db, "setting", "kitchen") }
+        db.withTransaction { Prefs.storeKitchen(text.trim()); MiseDb.mark(db, "setting", "kitchen") }
+    }
+}
+
+/**
+ * Household settings shared between the phones (week start, servings, no-cook slots, kitchen
+ * profile), so both phones always look at the same week and the same list. Each change is saved
+ * here at once and sent on the next sync; the save is never tied to a screen.
+ */
+object Shared {
+    const val WEEK_START = "weekStart"
+    const val SERVINGS = "servings"
+    const val NO_COOK = "noCook"
+    const val KITCHEN = "kitchen"
+    val keys = listOf(WEEK_START, SERVINGS, NO_COOK, KITCHEN)
+
+    private fun mark(context: Context, key: String) {
+        val db = MiseDb.get(context)
+        RecipeRepo.get(context).scope.launch { db.withTransaction { MiseDb.mark(db, "setting", key) } }
+    }
+
+    fun setWeekStart(context: Context, d: java.time.DayOfWeek) { Prefs.chooseWeekStart(d); mark(context, WEEK_START) }
+    fun setServings(context: Context, n: Int) { Prefs.chooseDefaultServings(n); mark(context, SERVINGS) }
+    fun setNoCook(context: Context, slots: Set<String>) { Prefs.storeNoCook(slots); mark(context, NO_COOK) }
+
+    /** The value sent to the household for [key]. */
+    fun value(key: String): String = when (key) {
+        WEEK_START -> Prefs.weekStart.value.toString()
+        SERVINGS -> Prefs.defaultServings.toString()
+        NO_COOK -> Prefs.noCook.sorted().joinToString(",")
+        KITCHEN -> Prefs.kitchen
+        else -> ""
+    }
+
+    /** Applies a value received from the household (never marks it again). */
+    fun apply(key: String, v: String) {
+        when (key) {
+            WEEK_START -> v.toIntOrNull()?.takeIf { it in 1..7 }?.let { Prefs.chooseWeekStart(java.time.DayOfWeek.of(it)) }
+            SERVINGS -> v.toIntOrNull()?.takeIf { it in 0..24 }?.let { Prefs.chooseDefaultServings(it) }
+            NO_COOK -> Prefs.storeNoCook(v.split(',').map { it.trim() }.filter { it.contains(':') }.toSet())
+            KITCHEN -> if (v.isNotBlank()) Prefs.storeKitchen(v)
+        }
     }
 }

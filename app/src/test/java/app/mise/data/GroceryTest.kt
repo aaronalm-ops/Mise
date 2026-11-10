@@ -67,6 +67,19 @@ class GroceryTest {
         assertEquals("yoghurt", Names.keyOf("Curd"))
     }
 
+    @Test fun homemadeMasalaIsNeverBought() {
+        val r = recipe("Sorpotel", 4, listOf(ing("Mom's masala", 2.0, Measure.TBSP), ing("Bottle masala", 1.0, Measure.TBSP)))
+        assertEquals(emptyList<String>(), Grocery.build(listOf(entry(r, 4))).map { it.name })
+    }
+
+    @Test fun peasMergeWithPea() {
+        val a = recipe("Pulao", 4, listOf(ing("Peas", 100.0, Measure.G)))
+        val b = recipe("Keema", 4, listOf(ing("pea", 50.0, Measure.G)))
+        val lines = Grocery.build(listOf(entry(a, 4), entry(b, 4)))
+        assertEquals(1, lines.size)
+        assertEquals("150 g", lines[0].amount)
+    }
+
     @Test fun weekStartsMonday() = assertEquals(LocalDate.of(2026, 10, 26), Grocery.weekStartOf(LocalDate.of(2026, 11, 1)))
     @Test fun weekCanStartSaturday() = assertEquals(LocalDate.of(2026, 10, 31), Grocery.weekStartOf(LocalDate.of(2026, 11, 1), DayOfWeek.SATURDAY))
 }

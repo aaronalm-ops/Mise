@@ -65,8 +65,9 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
             val cache = mutableMapOf<Long, Recipe?>()
             rows.mapNotNull { r ->
                 val recipe = cache[r.recipeId] ?: recipes.get(r.recipeId).also { cache[r.recipeId] = it } ?: return@mapNotNull null
+                val date = runCatching { LocalDate.parse(r.date) }.getOrNull() ?: return@mapNotNull null
                 PlanEntry(
-                    id = r.id, date = LocalDate.parse(r.date), meal = Meal.from(r.meal), recipe = recipe,
+                    id = r.id, date = date, meal = Meal.from(r.meal), recipe = recipe,
                     servings = r.servings, choices = Choices.decode(r.choices, recipe), leftovers = r.leftovers, createdAt = r.createdAt,
                 )
             }
@@ -74,7 +75,7 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
 
     fun notes(weekStart: LocalDate): Flow<List<PlanNote>> =
         dao.observeNotes(weekStart.toString(), weekStart.plusDays(6).toString()).map { rows ->
-            rows.map { PlanNote(it.id, LocalDate.parse(it.date), Meal.from(it.meal), it.text) }
+            rows.mapNotNull { n -> runCatching { LocalDate.parse(n.date) }.getOrNull()?.let { PlanNote(n.id, it, Meal.from(n.meal), n.text) } }
         }
 
     fun recentRecipeIds(): Flow<List<Long>> = dao.observeRecentRecipeIds(8)
@@ -112,7 +113,8 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
     fun list(weekStart: LocalDate, until: LocalDate? = null): Flow<WeekList> {
         val w = weekStart.toString()
         val prev = weekStart.minusWeeks(1)
-        val current = combine(week(weekStart), dao.observeChecks(w), dao.observeExtras(w)) { e, c, x -> Triple(e, c, x) }
+        // Added items not bought carry over for two weeks, then drop off.
+        val current = combine(week(weekStart), dao.observeChecks(w), dao.observeExtras(w, weekStart.minusWeeks(2).toString())) { e, c, x -> Triple(e, c, x) }
         val previous = combine(week(prev), dao.observeChecks(prev.toString())) { e, c -> e to c }
         return combine(current, previous, dao.observeIngredients()) { (entries, checks, extras), (prevEntries, prevChecks), ings ->
             val s = settings(ings)
@@ -120,7 +122,7 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
             val lines = Grocery.build(shown, s.aliases)
             val checkMap = checks.associateBy { it.itemKey }
             val items = lines.map { line -> lineItem(line, checkMap[line.key], s, weekStart) } +
-                extras.map { x ->
+                extras.filter { runCatching { LocalDate.parse(it.weekStart) }.isSuccess }.map { x ->
                     val k = Names.keyOf(x.name)
                     ListItem(
                         id = "extra:${x.id}", key = k, name = x.name, amount = x.qty, detail = null, dishes = emptyList(),
@@ -130,7 +132,9 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
                 }
             val thisWeekKeys = lines.map { it.key }.toSet()
             val prevCheckMap = prevChecks.associateBy { it.itemKey }
-            val lastWeek = Grocery.build(prevEntries, s.aliases)
+            // "From last week" only makes sense once that week is over.
+            val viewingFuture = weekStart.isAfter(Grocery.weekStartOf(LocalDate.now(), Prefs.weekStart))
+            val lastWeek = if (viewingFuture) emptyList() else Grocery.build(prevEntries, s.aliases)
                 .filter { it.key !in thisWeekKeys && it.key !in s.staples }
                 .map { lineItem(it, prevCheckMap[it.key], s, prev).copy(carried = true, id = "prev:${it.key}") }
                 .filter { !it.checked }
@@ -150,10 +154,17 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
     private fun lineItem(line: GroceryLine, check: ListCheckEntity?, s: KeySettings, week: LocalDate): ListItem {
         var checked = check != null
         var more: String? = null
-        if (check != null && check.amount > 0 && line.measure > check.amount * 1.02) {
-            checked = false
-            val (v, u) = Scaling.normalise(line.measure - check.amount, line.measureUnit)
-            more = "+" + Scaling.format(v, u).ifBlank { Scaling.plain(v) } + " more"
+        if (check != null && check.amount > 0) {
+            val sameUnit = check.unit.isBlank() || check.unit == line.measureUnit.key
+            if (!sameUnit) {
+                // The dishes changed what this line is measured in: ask again rather than guess.
+                checked = false
+                more = "Needs more since ticked"
+            } else if (line.measure > check.amount * 1.02) {
+                checked = false
+                val (v, u) = Scaling.normalise(line.measure - check.amount, line.measureUnit)
+                more = "+" + Scaling.format(v, u).ifBlank { Scaling.plain(v) } + " more"
+            }
         }
         return ListItem(
             id = "ing:${line.key}", key = line.key, name = line.name, amount = line.amount, detail = line.detail,
@@ -180,6 +191,22 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
         )
         MiseDb.mark(db, "plan", id.toString())
         id
+    }
+
+    /**
+     * Plans one cook and the later meals it covers as leftovers (Wednesday's dinner covering
+     * Thursday and Friday lunch). Returns every id made, so Undo can take them all back.
+     */
+    suspend fun addCook(date: LocalDate, meal: Meal, recipeId: Long, servings: Int, labels: List<String>, covers: List<Pair<LocalDate, Meal>>): List<Long> = tx {
+        val now = System.currentTimeMillis()
+        val ids = mutableListOf<Long>()
+        val main = dao.insertPlan(PlanEntryEntity(date = date.toString(), meal = meal.key, recipeId = recipeId, servings = servings, choices = Choices.encode(labels), createdAt = now))
+        MiseDb.mark(db, "plan", main.toString()); ids += main
+        covers.forEachIndexed { i, (d, m) ->
+            val id = dao.insertPlan(PlanEntryEntity(date = d.toString(), meal = m.key, recipeId = recipeId, servings = servings, choices = Choices.encode(labels), createdAt = now + 1 + i, leftovers = true))
+            MiseDb.mark(db, "plan", id.toString()); ids += id
+        }
+        ids
     }
 
     suspend fun updateEntry(id: Long, date: LocalDate, meal: Meal, recipeId: Long, servings: Int, labels: List<String>, leftovers: Boolean) = tx {
@@ -234,10 +261,19 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
             .map { PastWeek(it.key, it.value) }
     }
 
-    /** Copies a past week's dishes into [to], day for day. Skips any already there. Returns how many. */
+    /** Copies a past week's dishes and notes into [to], day for day. Skips any already there. Returns how many dishes. */
     suspend fun copyWeek(from: LocalDate, to: LocalDate): Int = tx {
         val source = dao.planRange(from.toString(), from.plusDays(6).toString())
         val target = dao.planRange(to.toString(), to.plusDays(6).toString())
+        val targetNotes = dao.notesRange(to.toString(), to.plusDays(6).toString())
+        dao.notesRange(from.toString(), from.plusDays(6).toString()).forEach { n0 ->
+            val offset = java.time.temporal.ChronoUnit.DAYS.between(from, LocalDate.parse(n0.date))
+            val date = to.plusDays(offset).toString()
+            if (targetNotes.none { it.date == date && it.meal == n0.meal }) {
+                val id = dao.insertNote(n0.copy(id = 0, date = date, createdAt = System.currentTimeMillis()))
+                MiseDb.mark(db, "note", id.toString())
+            }
+        }
         var n = 0
         source.forEach { e ->
             val offset = java.time.temporal.ChronoUnit.DAYS.between(from, LocalDate.parse(e.date))
@@ -266,7 +302,7 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
                 MiseDb.mark(db, "extra", it.id.toString())
             }
         } else {
-            if (checked) dao.check(ListCheckEntity(week, item.key, System.currentTimeMillis(), item.line?.measure ?: 0.0, by))
+            if (checked) dao.check(ListCheckEntity(week, item.key, System.currentTimeMillis(), item.line?.measure ?: 0.0, by, item.line?.measureUnit?.key ?: ""))
             else dao.uncheck(week, item.key)
             MiseDb.mark(db, "check", "$week|${item.key}")
         }
@@ -311,7 +347,7 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
     }
 
     suspend fun setAisle(key: String, name: String, aisle: Aisle) = tx {
-        rowsFor(key, name).forEach { dao.setAisle(it.id, aisle.key); MiseDb.mark(db, "ingredient", it.nameKey) }
+        rowsFor(key, name).forEach { dao.setAisle(it.id, aisle.key); MiseDb.mark(db, "ing_aisle", it.nameKey) }
     }
 
     suspend fun setStaple(key: String, name: String, staple: Boolean) = setLevel(key, name, if (staple) Pantry.HAVE else Pantry.NONE)
@@ -320,12 +356,12 @@ class PlanRepo private constructor(private val db: MiseDb, private val recipes: 
     suspend fun setLevel(key: String, name: String, level: Int) = tx { setLevelIn(key, name, level) }
 
     private suspend fun setLevelIn(key: String, name: String, level: Int) {
-        rowsFor(key, name).forEach { dao.setStapleChoice(it.id, level); MiseDb.mark(db, "ingredient", it.nameKey) }
+        rowsFor(key, name).forEach { dao.setStapleChoice(it.id, level); MiseDb.mark(db, "ing_level", it.nameKey) }
     }
 
     /** "Same as...": merges [fromKey] into [toKey] on the list from now on. */
     suspend fun setSameAs(fromKey: String, fromName: String, toKey: String) = tx {
-        rowsFor(fromKey, fromName).forEach { dao.setAlias(it.id, toKey); MiseDb.mark(db, "ingredient", it.nameKey) }
+        rowsFor(fromKey, fromName).forEach { dao.setAlias(it.id, toKey); MiseDb.mark(db, "ing_alias", it.nameKey) }
     }
 
     /** Everything kept at home and how much is left, for the Pantry tab. */

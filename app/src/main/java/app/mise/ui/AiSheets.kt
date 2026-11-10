@@ -60,6 +60,7 @@ import app.mise.data.Ai
 import app.mise.data.Choices
 import app.mise.data.Meal
 import app.mise.data.PlanRepo
+import app.mise.data.Prefs
 import app.mise.data.RecipeRepo
 import app.mise.data.Suggestion
 import app.mise.data.WeekIdeas
@@ -264,7 +265,8 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
 
     val today = LocalDate.now()
     val days = (0..6).map { weekStart.plusDays(it.toLong()) }.filter { !it.isBefore(today) }
-    val slots = days.associateWith { d -> meals.filter { m -> entries.none { it.date == d && it.meal == m } && notes.none { it.date == d && it.meal == m } } }
+    // No-cook evenings (Settings, Planning) are left empty; the day before covers the next lunch.
+    val slots = days.associateWith { d -> meals.filter { m -> !Prefs.isNoCook(d.dayOfWeek, m.key) && entries.none { it.date == d && it.meal == m } && notes.none { it.date == d && it.meal == m } } }
         .filterValues { it.isNotEmpty() }
     val slotCount = slots.values.sumOf { it.size }
 
@@ -273,7 +275,7 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
         error = null; busy = true; ideas = null; off = emptySet()
         job = scope.launch {
             try {
-                ideas = Ai.suggestWeek(lib, entries, notes, slots.mapValues { it.value.toList() }, wishes)
+                ideas = Ai.suggestWeek(ctx, lib, entries, notes, slots.mapValues { it.value.toList() }, wishes)
                 if (ideas?.items.isNullOrEmpty()) error = "No suggestions came back. Try again, or loosen your wishes."
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -312,9 +314,10 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
                             val ids = chosen.flatMap { s ->
                                 val r = recipes.get(s.recipe.id) ?: return@flatMap emptyList()
                                 val serv = s.servings ?: plan.defaultServings(r)
-                                val main = plan.addEntry(s.date, s.meal, r.id, serv, Choices.decode("", r))
-                                val side = s.side?.let { recipes.get(it.id) }?.let { sr -> plan.addEntry(s.date, s.meal, sr.id, serv, Choices.decode("", sr)) }
-                                listOfNotNull(main, side)
+                                // Leftovers rows for the lunches this cook covers, so they show on the plan.
+                                val main = plan.addCook(s.date, s.meal, r.id, serv, Choices.decode("", r), s.covers)
+                                val side = s.side?.let { recipes.get(it.id) }?.let { sr -> plan.addCook(s.date, s.meal, sr.id, serv, Choices.decode("", sr), s.covers) }.orEmpty()
+                                main + side
                             }
                             Toasts.undo(if (ids.size == 1) "Added 1 dish" else "Added ${ids.size} dishes") {
                                 plan.scope.launch { ids.forEach { plan.removeEntry(it) } }
@@ -364,7 +367,11 @@ private fun SuggestionRow(s: Suggestion, checked: Boolean, onToggle: () -> Unit)
         Column(Modifier.weight(1f)) {
             Text(slotLabel(s.date, s.meal).uppercase(), style = Mise.type.labelS, color = c.text2)
             Text(s.recipe.title + (s.side?.let { " + " + it.title } ?: ""), style = Mise.type.bodyM, color = if (checked) c.text else c.text2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            s.servings?.let { Text("$it servings", style = Mise.type.bodyS, color = c.text2) }
+            val extra = listOfNotNull(
+                s.servings?.let { "$it servings" },
+                s.covers.takeIf { it.isNotEmpty() }?.let { cv -> "also " + cv.joinToString(" and ") { (d, m) -> d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.UK) + " " + m.label.lowercase() } },
+            )
+            if (extra.isNotEmpty()) Text(extra.joinToString(" · ").replaceFirstChar { it.uppercase() }, style = Mise.type.bodyS, color = c.text2)
             if (s.reason.isNotBlank()) Text(s.reason, style = Mise.type.bodyS, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }

@@ -26,6 +26,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Prefs.init(this)
         SyncEngine.init(this)
+        // Re-arms the weekly reminder (an update or a clock change can drop the alarm).
+        if (savedInstanceState == null) Reminder.schedule(this)
         if (savedInstanceState == null) open = intent?.getStringExtra(Reminder.OPEN_EXTRA)
         setContent {
             val dark = when (Prefs.theme) {

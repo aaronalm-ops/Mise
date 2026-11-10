@@ -106,6 +106,8 @@ fun RecipeEditorScreen(
     var closing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var askDiscard by remember { mutableStateOf(false) }
+    /** The recipe was saved again (here or on the other phone) after this draft was written. */
+    var changedSince by remember { mutableStateOf(false) }
     var askDelete by remember { mutableStateOf(false) }
     var paste by remember { mutableStateOf<PasteKind?>(null) }
     var focusKey by remember { mutableStateOf<Long?>(null) }
@@ -117,7 +119,8 @@ fun RecipeEditorScreen(
             is EditTarget.Existing -> {
                 val resumed = repo.draftForRecipe(target.recipeId)
                 if (resumed != null) {
-                    draftId = resumed.first; state = resumed.second; draftSaved = true
+                    draftId = resumed.id; state = resumed.state; draftSaved = true
+                    changedSince = resumed.changedElsewhere
                 } else {
                     state = repo.get(target.recipeId)?.let { EditorState.fromRecipe(it) } ?: EditorState()
                 }
@@ -205,6 +208,32 @@ fun RecipeEditorScreen(
         }
         if (s == null) return@Column
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
+            if (changedSince) {
+                Card {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("This is your unfinished edit", style = Mise.type.bodyM, color = c.text)
+                        Text(
+                            "The recipe was saved again after you started it, maybe on the other phone. Saving this edit replaces that version.",
+                            style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(top = 4.dp),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            GhostButton("Keep my edit", { changedSince = false })
+                            GhostButton("Use the saved recipe", {
+                                val rid = (target as? EditTarget.Existing)?.recipeId
+                                changedSince = false
+                                draftId?.let { id -> repo.scope.launch { repo.deleteDraft(id) } }
+                                draftId = null; draftSaved = false; dirty = false
+                                if (rid != null) repo.scope.launch {
+                                    val fresh = repo.get(rid)?.let { EditorState.fromRecipe(it) }
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { if (fresh != null) state = fresh }
+                                }
+                            })
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
             MiseField(s.title, { v -> update { it.copy(title = v) } }, "Recipe name", Modifier.fillMaxWidth(), big = true, capitalization = KeyboardCapitalization.Words, minHeight = 56, error = error != null && s.title.isBlank())
 
             SectionLabel("Dish type")
@@ -313,13 +342,16 @@ fun RecipeEditorScreen(
             title = { Text("Leave this recipe?", style = Mise.type.displayS, color = c.text) },
             text = { Text("Keep it as a draft to finish later (it waits in Recipes, under Drafts), or discard what you changed.", style = Mise.type.body, color = c.text2) },
             confirmButton = {
-                TextButton(onClick = {
-                    askDiscard = false
-                    closing = true
-                    val st = state
-                    if (st != null) repo.scope.launch { repo.saveDraft(draftId, st) }
-                    onClose()
-                }) { Text("Keep draft", style = Mise.type.bodyM, color = c.text) }
+                Row {
+                    TextButton(onClick = { askDiscard = false }) { Text("Keep editing", style = Mise.type.bodyM, color = c.text) }
+                    TextButton(onClick = {
+                        askDiscard = false
+                        closing = true
+                        val st = state
+                        if (st != null) repo.scope.launch { repo.saveDraft(draftId, st) }
+                        onClose()
+                    }) { Text("Keep draft", style = Mise.type.bodyM, color = c.text) }
+                }
             },
             dismissButton = {
                 TextButton(onClick = {

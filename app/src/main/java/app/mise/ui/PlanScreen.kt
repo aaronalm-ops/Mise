@@ -156,7 +156,7 @@ fun PlanScreen(
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)) {
             if (entries == null) return@LazyColumn
             val openDays = days.count { d -> !d.isBefore(today) && list.none { it.date == d } && notes.none { it.date == d } }
-            if (openDays >= 3 && app.mise.data.Ai.available) {
+            if (openDays >= 3 && app.mise.data.Ai.enabled) {
                 item(key = "suggest") {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 8.dp).background(c.surface, CardShape)
