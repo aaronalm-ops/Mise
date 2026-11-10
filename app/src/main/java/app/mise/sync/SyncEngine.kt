@@ -9,6 +9,7 @@ import app.mise.data.ListExtraEntity
 import app.mise.data.MiseDb
 import app.mise.data.PlanEntryEntity
 import app.mise.data.PlanNoteEntity
+import app.mise.data.Prefs
 import app.mise.data.RecipeRepo
 import app.mise.data.SyncRowEntity
 import kotlinx.coroutines.CoroutineScope
@@ -223,7 +224,7 @@ object SyncEngine {
                 val i = dao.ingredient(r.localKey)
                 if (i == null) deleted = true else data.put("name", i.name).put("aisle", i.aisle).put("stapleChoice", i.stapleChoice).put("aliasOf", i.aliasOf)
             }
-            "setting" -> if (r.localKey == "kitchen") data.put("text", app.mise.data.Prefs.kitchen)
+            "setting" -> if (r.localKey == "kitchen") data.put("text", Prefs.kitchen)
         }
         return JSONObject().put("household_id", household).put("kind", r.kind).put("uid", r.uid).put("data", data).put("deleted", deleted)
     }
@@ -345,7 +346,7 @@ object SyncEngine {
                 }
                 "setting" -> {
                     if (deleted) return@withTransaction
-                    if (uid == "kitchen" && data.has("text")) app.mise.data.Prefs.storeKitchen(data.optString("text"))
+                    if (uid == "kitchen" && data.has("text")) Prefs.storeKitchen(data.optString("text"))
                     d.put(SyncRowEntity(kind, uid, uid, 0, at))
                 }
                 "ingredient" -> {
