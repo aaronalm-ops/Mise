@@ -25,6 +25,8 @@ object Prefs {
     var reminderDay by mutableStateOf(DayOfWeek.SATURDAY); private set
     var reminderHour by mutableIntStateOf(18); private set
     var listHintSeen by mutableStateOf(false); private set
+    /** How this household eats, in plain words, for Mise AI. Shared with the household. */
+    var kitchen by mutableStateOf(""); private set
 
     fun init(context: Context) {
         if (::sp.isInitialized) return
@@ -36,6 +38,7 @@ object Prefs {
         reminderDay = DayOfWeek.of(sp.getInt("reminderDay", 6).coerceIn(1, 7))
         reminderHour = sp.getInt("reminderHour", 18)
         listHintSeen = sp.getBoolean("listHintSeen", false)
+        kitchen = sp.getString("kitchen", null) ?: Kitchen.DEFAULT
     }
 
     fun chooseTheme(t: Theme) { theme = t; sp.edit().putString("theme", t.name).apply() }
@@ -45,6 +48,8 @@ object Prefs {
         reminderOn = on; reminderDay = day; reminderHour = hour
         sp.edit().putBoolean("reminderOn", on).putInt("reminderDay", day.value).putInt("reminderHour", hour).apply()
     }
+    /** Stores the kitchen profile (use Kitchen.save to also share it with the household). */
+    fun storeKitchen(text: String) { kitchen = text; sp.edit().putString("kitchen", text).apply() }
     fun markListHintSeen() { listHintSeen = true; sp.edit().putBoolean("listHintSeen", true).apply() }
 
     fun flag(name: String): Boolean = sp.getBoolean(name, false)

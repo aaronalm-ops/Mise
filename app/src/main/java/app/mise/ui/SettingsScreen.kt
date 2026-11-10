@@ -265,7 +265,11 @@ private fun AiCheckCard() {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var busy by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var result by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var editKitchen by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    if (editKitchen) KitchenSheet(onDismiss = { editKitchen = false })
     Card {
+        NavRow("How we cook", Prefs.kitchen.lineSequence().firstOrNull()?.take(80)?.let { "$it…" } ?: "Tell Mise AI how your household eats") { editKitchen = true }
+        Divider()
         NavRow(if (busy) "Checking…" else "Check Mise AI", "Photo to recipe, recipe from an idea, suggest dishes") {
             if (busy) return@NavRow
             if (!app.mise.data.Ai.available) { result = "Sign in first (Household above)."; return@NavRow }
@@ -284,6 +288,33 @@ private fun AiCheckCard() {
         result?.let { msg ->
             Divider()
             Text(msg, style = Mise.type.bodyS, color = c.text, modifier = Modifier.padding(16.dp))
+        }
+    }
+}
+
+/** The kitchen profile Mise AI follows: editable, shared with the household. */
+@Composable
+private fun KitchenSheet(onDismiss: () -> Unit) {
+    val c = Mise.colours
+    val ctx = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var text by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(Prefs.kitchen) }
+    MiseSheet(title = "How we cook", eyebrow = "Mise AI follows this", onDismiss = onDismiss) {
+        Column(Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
+            Text(
+                "Plain words are best: your weekly pattern, proteins, sides, servings, what to avoid. Suggestions and new recipes follow it. Shared with your household.",
+                style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp),
+            )
+            MiseField(text, { text = it.take(3000) }, "How your household cooks and eats", Modifier.fillMaxWidth(), singleLine = false, minHeight = 260)
+            Spacer(Modifier.height(12.dp))
+            PrimaryButton("Save", {
+                val t = text
+                scope.launch { app.mise.data.Kitchen.save(ctx, t) }
+                Toasts.show("Saved. Mise AI will follow it.")
+                onDismiss()
+            }, Modifier.fillMaxWidth(), enabled = text.isNotBlank() && text != Prefs.kitchen)
+            Spacer(Modifier.height(4.dp))
+            TextAction("Reset to the starting profile", { text = app.mise.data.Kitchen.DEFAULT })
         }
     }
 }

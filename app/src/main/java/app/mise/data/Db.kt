@@ -573,7 +573,7 @@ abstract class MiseDb : RoomDatabase() {
                 val uid = when (kind) {
                     // Ticks and ingredient settings use the same id on every phone, so two
                     // phones changing the same item meet in one shared row.
-                    "check", "ingredient" -> key
+                    "check", "ingredient", "setting" -> key
                     else -> java.util.UUID.randomUUID().toString()
                 }
                 d.put(SyncRowEntity(kind, key, uid, 1))

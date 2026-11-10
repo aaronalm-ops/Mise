@@ -110,7 +110,7 @@ fun AiRecipeSheet(mode: AiRecipeMode, onDismiss: () -> Unit, onDraft: (Long) -> 
     var thumbs by remember { mutableStateOf(mapOf<Uri, ImageBitmap>()) }
     var hint by remember { mutableStateOf("") }
     var idea by remember { mutableStateOf("") }
-    var serves by remember { mutableIntStateOf(4) }
+    var serves by remember { mutableIntStateOf(app.mise.data.Prefs.defaultServings.takeIf { it > 0 } ?: 4) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
@@ -309,9 +309,12 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
                     PrimaryButton(if (n == 0) "Tick the dishes to add" else if (n == 1) "Add 1 dish to the plan" else "Add $n dishes to the plan", {
                         val chosen = result.items.filterIndexed { i, _ -> i !in off }
                         plan.scope.launch {
-                            val ids = chosen.mapNotNull { s ->
-                                val r = recipes.get(s.recipe.id) ?: return@mapNotNull null
-                                plan.addEntry(s.date, s.meal, r.id, plan.defaultServings(r), Choices.decode("", r))
+                            val ids = chosen.flatMap { s ->
+                                val r = recipes.get(s.recipe.id) ?: return@flatMap emptyList()
+                                val serv = s.servings ?: plan.defaultServings(r)
+                                val main = plan.addEntry(s.date, s.meal, r.id, serv, Choices.decode("", r))
+                                val side = s.side?.let { recipes.get(it.id) }?.let { sr -> plan.addEntry(s.date, s.meal, sr.id, serv, Choices.decode("", sr)) }
+                                listOfNotNull(main, side)
                             }
                             Toasts.undo(if (ids.size == 1) "Added 1 dish" else "Added ${ids.size} dishes") {
                                 plan.scope.launch { ids.forEach { plan.removeEntry(it) } }
@@ -360,7 +363,8 @@ private fun SuggestionRow(s: Suggestion, checked: Boolean, onToggle: () -> Unit)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(slotLabel(s.date, s.meal).uppercase(), style = Mise.type.labelS, color = c.text2)
-            Text(s.recipe.title, style = Mise.type.bodyM, color = if (checked) c.text else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(s.recipe.title + (s.side?.let { " + " + it.title } ?: ""), style = Mise.type.bodyM, color = if (checked) c.text else c.text2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            s.servings?.let { Text("$it servings", style = Mise.type.bodyS, color = c.text2) }
             if (s.reason.isNotBlank()) Text(s.reason, style = Mise.type.bodyS, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }

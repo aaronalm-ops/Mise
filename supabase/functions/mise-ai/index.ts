@@ -107,10 +107,12 @@ const WEEK_TOOL = {
           properties: {
             date: { type: "string", description: "ISO date from the given days" },
             meal: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
-            recipeId: { type: "integer", description: "id from the library" },
+            recipeId: { type: "integer", description: "id of the main dish from the library" },
+            sideId: { type: "integer", description: "id of a rice or bread side from the library to cook with a curry, or 0 for none" },
+            servings: { type: "integer", description: "Servings to cook, following the kitchen profile (bigger when the cook covers extra meals)" },
             reason: { type: "string", description: "Why this dish, in at most eight words" },
           },
-          required: ["date", "meal", "recipeId", "reason"],
+          required: ["date", "meal", "recipeId", "sideId", "servings", "reason"],
         },
       },
       summary: { type: "string", description: "One short sentence about the week's balance" },
@@ -234,6 +236,8 @@ Deno.serve(async (req) => {
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400); }
+  const kitchen = String(body.kitchen ?? "").trim().slice(0, 3000);
+  const SYSTEM = kitchen ? `${HOUSE}\n\nHow this household cooks and eats (follow it closely):\n${kitchen}` : HOUSE;
 
   try {
     switch (body.task) {
@@ -249,7 +253,7 @@ Deno.serve(async (req) => {
             (body.hint ? `\nThe cook's note: ${String(body.hint).slice(0, 300)}` : ""),
         }];
         images.forEach((i) => content.push({ type: "image_url", image_url: { url: `data:${i.media_type};base64,${i.data}` } }));
-        return json({ recipe: await ask(HOUSE, content, RECIPE_TOOL, 4000, true) });
+        return json({ recipe: await ask(SYSTEM, content, RECIPE_TOOL, 4000, true) });
       }
       case "idea": {
         const ask = String(body.prompt ?? "").slice(0, 600);
@@ -258,19 +262,20 @@ Deno.serve(async (req) => {
         const text = `Write one reliable, home-cookable recipe for ${serves} servings for this request: "${ask}". ` +
           `Use ingredients easy to buy in UAE supermarkets (Lulu, Carrefour, Spinneys). Give exact amounts. ` +
           `Mention in notes any shortcut or swap worth knowing.`;
-        return json({ recipe: await ask(HOUSE, [{ type: "text", text }], RECIPE_TOOL) });
+        return json({ recipe: await ask(SYSTEM, [{ type: "text", text }], RECIPE_TOOL) });
       }
       case "week": {
         const library = (body.library as unknown[]) ?? [];
         const text = `Plan the empty slots of this week from the library only.\n` +
           `Days and meals to fill (ISO date: meals): ${JSON.stringify(body.slots)}\n` +
           `Already planned this week: ${JSON.stringify(body.planned ?? [])}\n` +
-          `Library (id, title, dishType, cuisine, lastHad): ${JSON.stringify(library)}\n` +
-          `Their wishes for this week: ${String(body.wishes ?? "none").slice(0, 400)}\n` +
-          `Rules: vary dish types and cuisines across the week; do not repeat a dish; prefer dishes not had for a while; ` +
-          `quick dishes on busy weekdays, bigger cooks at the weekend; a curry pairs with a rice or bread already in the library only if it makes sense. ` +
-          `Use only ids from the library and only the given slots.`;
-        return json(await ask(HOUSE, [{ type: "text", text }], WEEK_TOOL, 2500));
+          `Library (id, title, dishType, cuisine, lastHad, proteins): ${JSON.stringify(library)}\n` +
+          `Wishes for this week: ${String(body.wishes ?? "none").slice(0, 400)}\n` +
+          `Rules: follow the household's profile first (weekly pattern, protein rotation, sides, servings). ` +
+          `Do not repeat a main dish in the week, and count what is already planned. Prefer dishes not had for a while. ` +
+          `For a curry or gravy dish, set sideId to a rice or bread dish from the library (Rice, Breakfast or bread types), otherwise 0. ` +
+          `Leave a slot out when the profile says there is no cooking then. Use only ids from the library and only the given slots.`;
+        return json(await ask(SYSTEM, [{ type: "text", text }], WEEK_TOOL, 2500));
       }
       case "status": {
         const text = (await candidates(false)).filter((m) => !retired.has(m));

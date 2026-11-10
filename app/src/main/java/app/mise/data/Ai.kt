@@ -17,7 +17,16 @@ import java.time.LocalDate
 import kotlin.math.max
 
 /** A dish the AI suggests for a slot, already matched to a recipe in the library. */
-data class Suggestion(val date: LocalDate, val meal: Meal, val recipe: RecipeSummary, val reason: String)
+data class Suggestion(
+    val date: LocalDate,
+    val meal: Meal,
+    val recipe: RecipeSummary,
+    val reason: String,
+    /** A rice or bread dish to cook alongside a curry, also from the library. */
+    val side: RecipeSummary? = null,
+    /** Servings the AI chose from the kitchen profile, or null for the household default. */
+    val servings: Int? = null,
+)
 
 data class WeekIdeas(val items: List<Suggestion>, val summary: String)
 
@@ -33,13 +42,13 @@ object Ai {
     suspend fun recipeFromPhotos(ctx: Context, uris: List<Uri>, hint: String): EditorState = withContext(Dispatchers.IO) {
         val images = JSONArray()
         uris.take(4).forEach { images.put(JSONObject().put("media_type", "image/jpeg").put("data", encode(ctx, it))) }
-        val r = Supa.ai(JSONObject().put("task", "photo").put("images", images).put("hint", hint.trim()))
+        val r = Supa.ai(JSONObject().put("task", "photo").put("images", images).put("hint", hint.trim()).put("kitchen", Prefs.kitchen))
         toEditor(r.getJSONObject("recipe"), "Read from a photo by Mise AI. Check the amounts, then save.")
     }
 
     /** Writes a recipe for a request ("butter chicken without cream, 30 minutes"). */
     suspend fun recipeFromIdea(prompt: String, serves: Int): EditorState = withContext(Dispatchers.IO) {
-        val r = Supa.ai(JSONObject().put("task", "idea").put("prompt", prompt.trim()).put("serves", serves))
+        val r = Supa.ai(JSONObject().put("task", "idea").put("prompt", prompt.trim()).put("serves", serves).put("kitchen", Prefs.kitchen))
         toEditor(r.getJSONObject("recipe"), "Written by Mise AI for: “${prompt.trim()}”. Check it, then save.")
     }
 
@@ -53,7 +62,7 @@ object Ai {
     ): WeekIdeas = withContext(Dispatchers.IO) {
         val lib = JSONArray()
         library.forEach { s ->
-            lib.put(JSONArray().put(s.id).put(s.title).put(s.dishType).put(s.cuisine).put(s.lastPlanned ?: "never"))
+            lib.put(JSONArray().put(s.id).put(s.title).put(s.dishType).put(s.cuisine).put(s.lastPlanned ?: "never").put(proteins(s.searchText)))
         }
         val already = JSONArray()
         planned.forEach { already.put("${it.date} ${it.meal.key}: ${it.recipe.title}" + if (it.leftovers) " (leftovers)" else "") }
@@ -61,7 +70,8 @@ object Ai {
         val want = JSONObject()
         slots.forEach { (d, meals) -> want.put(d.toString(), JSONArray(meals.map { it.key })) }
         val r = Supa.ai(
-            JSONObject().put("task", "week").put("library", lib).put("planned", already).put("slots", want).put("wishes", wishes.trim()),
+            JSONObject().put("task", "week").put("library", lib).put("planned", already).put("slots", want).put("wishes", wishes.trim())
+                .put("kitchen", Prefs.kitchen),
         )
         val byId = library.associateBy { it.id }
         val seen = mutableSetOf<String>()
@@ -72,10 +82,20 @@ object Ai {
             val meal = Meal.from(o.optString("meal", "dinner"))
             val recipe = byId[o.optLong("recipeId")] ?: return@mapNotNull null
             if (slots[date]?.contains(meal) != true || !seen.add("$date$meal")) return@mapNotNull null
-            Suggestion(date, meal, recipe, o.optString("reason"))
+            val side = byId[o.optLong("sideId")]?.takeIf { it.id != recipe.id }
+            val servings = o.optInt("servings", 0).takeIf { it in 1..24 }
+            Suggestion(date, meal, recipe, o.optString("reason"), side, servings)
         }.sortedWith(compareBy({ it.date }, { it.meal.ordinal }))
         WeekIdeas(items, r.optString("summary"))
     }
+
+    private val proteinWords = listOf(
+        "chicken", "mutton", "lamb", "beef", "pork", "bacon", "sausage", "prawn", "shrimp", "fish", "dory", "salmon", "tuna",
+        "turkey", "egg", "paneer", "dal", "chana", "mushroom",
+    )
+
+    /** The main proteins in a dish, so the AI can rotate them ("beef, sausage"). */
+    private fun proteins(text: String): String = proteinWords.filter { text.contains(it) }.take(3).joinToString(", ").ifEmpty { "vegetables" }
 
     private fun toEditor(r: JSONObject, origin: String): EditorState {
         if (r.optString("title").equals("Not a recipe", true)) {

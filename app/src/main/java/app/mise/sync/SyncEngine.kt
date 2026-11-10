@@ -60,7 +60,7 @@ object SyncEngine {
     val status: StateFlow<SyncStatus> = _status
 
     private val db get() = MiseDb.get(app)
-    private val order = listOf("ingredient", "recipe", "plan", "note", "extra", "check")
+    private val order = listOf("ingredient", "recipe", "plan", "note", "extra", "check", "setting")
     private const val OVERLAP_SECONDS = 120L
 
     fun init(context: Context) {
@@ -223,6 +223,7 @@ object SyncEngine {
                 val i = dao.ingredient(r.localKey)
                 if (i == null) deleted = true else data.put("name", i.name).put("aisle", i.aisle).put("stapleChoice", i.stapleChoice).put("aliasOf", i.aliasOf)
             }
+            "setting" -> if (r.localKey == "kitchen") data.put("text", app.mise.data.Prefs.kitchen)
         }
         return JSONObject().put("household_id", household).put("kind", r.kind).put("uid", r.uid).put("data", data).put("deleted", deleted)
     }
@@ -341,6 +342,11 @@ object SyncEngine {
                     if (!deleted && data.optBoolean("checked")) dao.check(ListCheckEntity(week, key, System.currentTimeMillis(), data.optDouble("amount", 0.0), data.optString("by")))
                     else dao.uncheck(week, key)
                     d.put(SyncRowEntity(kind, "$week|$key", uid, 0, at))
+                }
+                "setting" -> {
+                    if (deleted) return@withTransaction
+                    if (uid == "kitchen" && data.has("text")) app.mise.data.Prefs.storeKitchen(data.optString("text"))
+                    d.put(SyncRowEntity(kind, uid, uid, 0, at))
                 }
                 "ingredient" -> {
                     if (deleted) return@withTransaction
