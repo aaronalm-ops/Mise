@@ -26,6 +26,125 @@ const VISION_FAMILIES = [
 ];
 const SKIP = /(embed|guard|reward|safety|rerank|parse|coder|math|retriev|translate|audio|asr|tts|clip)/i;
 
+const KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
+const ALLOWED = (Deno.env.get("MISE_AI_EMAILS") ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const ANON = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+
+const CUISINES = ["Indian", "Goan", "Pakistani", "Indo-Chinese", "Chinese", "Thai", "Indonesian", "Japanese", "Italian", "American", "British", "Turkish", "Fusion", "International"];
+const DISH_TYPES = ["Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew", "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad", "Breakfast", "Dessert and sweet bake", "Drink", "Sauce and dip"];
+const UNITS = ["g", "kg", "ml", "l", "tsp", "tbsp", "cup", "pc", "clove", "can", "pack", "bunch", "sprig", "pinch", "to taste"];
+
+const HOUSE = `You help a household in the UAE with their recipe and meal-planning app, Mise.
+They cook Indian and Goan food most often, plus Italian, Indo-Chinese and quick weeknight dishes.
+Write in British English. Use metric amounts and only these units: ${UNITS.join(", ")}.
+Garlic is counted in cloves; onions, tomatoes and eggs in pc; herbs for garnish in bunch (0.25 bunch for a garnish), curry leaves in sprig.
+Every ingredient gets a quantity unless it is "to taste" (then qty is empty).`;
+
+const ING = {
+  type: "object",
+  properties: {
+    name: { type: "string", description: "Ingredient name, capitalised, singular or plural as usually written, no amount" },
+    qty: { type: "string", description: "Number as text, e.g. 500, 1.5, 0.25. Empty for to taste." },
+    unit: { type: "string", enum: UNITS },
+    note: { type: "string", description: "Preparation or remark, e.g. finely chopped. Add 'est.' when you estimated the amount." },
+  },
+  required: ["name", "qty", "unit", "note"],
+};
+
+const RECIPE_TOOL = {
+  name: "save_recipe",
+  description: "Save one recipe in Mise's format.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "Short dish name in sentence case" },
+      cuisine: { type: "string", enum: CUISINES },
+      dishType: { type: "string", enum: DISH_TYPES },
+      serves: { type: "integer", minimum: 1, maximum: 24 },
+      prep: { type: "string", description: "Prep minutes as digits, or empty" },
+      cook: { type: "string", description: "Cook minutes as digits, or empty" },
+      tags: { type: "string", description: "Optional facets, comma separated, from: Vegetarian, Quick, Air fryer, Oven, Pressure cooker" },
+      ings: { type: "array", items: ING, description: "Ingredients always used" },
+      slots: {
+        type: "array",
+        description: "Swaps, only when the recipe offers a real choice (e.g. Protein: Chicken or Prawn). Usually empty.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            options: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { label: { type: "string" }, isDefault: { type: "boolean" }, note: { type: "string" }, ings: { type: "array", items: ING } },
+                required: ["label", "isDefault", "note", "ings"],
+              },
+            },
+          },
+          required: ["name", "options"],
+        },
+      },
+      steps: { type: "array", items: { type: "string" }, description: "Clear numbered-style steps without the numbers" },
+      notes: { type: "string", description: "Tips, serving ideas, and anything you were unsure about" },
+    },
+    required: ["title", "cuisine", "dishType", "serves", "prep", "cook", "tags", "ings", "slots", "steps", "notes"],
+  },
+};
+
+const WEEK_TOOL = {
+  name: "suggest_week",
+  description: "Suggest dishes for the empty slots of the week, chosen only from the library.",
+  input_schema: {
+    type: "object",
+    properties: {
+      plan: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "ISO date from the given days" },
+            meal: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
+            recipeId: { type: "integer", description: "id of the main dish from the library" },
+            sideId: { type: "integer", description: "id of a rice or bread side from the library to cook with a curry, or 0 for none" },
+            servings: { type: "integer", description: "Servings to cook, following the kitchen profile (bigger when the cook covers extra meals)" },
+            reason: { type: "string", description: "Why this dish, in at most eight words" },
+          },
+          required: ["date", "meal", "recipeId", "sideId", "servings", "reason"],
+        },
+      },
+      summary: { type: "string", description: "One short sentence about the week's balance" },
+    },
+    required: ["plan", "summary"],
+  },
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+/** Pulls the JSON object out of a model reply (drops thinking, code fences and chatter). */
+function extract(text: string): unknown {
+  const t = text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/```(?:json)?/g, "");
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a < 0 || b <= a) throw new Error("no json");
+  return JSON.parse(t.slice(a, b + 1));
+}
+
+/** NVIDIA's live model list, read once per server start. */
+let catalogue: string[] | null = null;
+async function available(): Promise<string[]> {
+  if (catalogue) return catalogue;
+  try {
+    const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` }, signal: AbortSignal.timeout(8000) });
+    const d = await r.json();
+    catalogue = (d?.data ?? []).map((m: { id: string }) => m.id);
+  } catch {
+    catalogue = [];
+  }
+  return catalogue!;
+}
+
 /** The models to try, in order: preferred ones that exist, then (for photos) any image reader. */
 async function candidates(vision: boolean): Promise<string[]> {
   const forced = Deno.env.get(vision ? "MISE_VISION_MODEL" : "MISE_MODEL");
@@ -161,10 +280,10 @@ Deno.serve(async (req) => {
         return json({ recipe: await ask(SYSTEM, content, RECIPE_TOOL, 4000, true) });
       }
       case "idea": {
-        const ask = String(body.prompt ?? "").slice(0, 600);
-        if (!ask.trim()) return json({ error: "Say what you would like to cook." }, 400);
+        const request = String(body.prompt ?? "").slice(0, 600);
+        if (!request.trim()) return json({ error: "Say what you would like to cook." }, 400);
         const serves = Number(body.serves ?? 4);
-        const text = `Write one reliable, home-cookable recipe for ${serves} servings for this request: "${ask}". ` +
+        const text = `Write one reliable, home-cookable recipe for ${serves} servings for this request: "${request}". ` +
           `Use ingredients easy to buy in UAE supermarkets (Lulu, Carrefour, Spinneys). Give exact amounts. ` +
           `Mention in notes any shortcut or swap worth knowing.`;
         return json({ recipe: await ask(SYSTEM, [{ type: "text", text }], RECIPE_TOOL) });
