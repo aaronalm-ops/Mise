@@ -156,7 +156,7 @@ fun PlanScreen(
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)) {
             if (entries == null) return@LazyColumn
             val openDays = days.count { d -> !d.isBefore(today) && list.none { it.date == d } && notes.none { it.date == d } }
-            if (openDays >= 3 && app.mise.data.Ai.enabled) {
+            if (openDays >= 3) {
                 item(key = "suggest") {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 8.dp).background(c.surface, CardShape)
@@ -169,7 +169,7 @@ fun PlanScreen(
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text("$openDays days to plan", style = Mise.type.bodyM, color = c.text)
-                            Text("Mise AI can suggest dishes from your recipes", style = Mise.type.bodyS, color = c.text2)
+                            Text("Mise can suggest dishes from your recipes", style = Mise.type.bodyS, color = c.text2)
                         }
                         Icon(MiseIcons.Forward, contentDescription = null, tint = c.text2, modifier = Modifier.size(18.dp))
                     }

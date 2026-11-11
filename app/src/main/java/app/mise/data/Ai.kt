@@ -16,22 +16,6 @@ import java.io.IOException
 import java.time.LocalDate
 import kotlin.math.max
 
-/** A dish the AI suggests for a slot, already matched to a recipe in the library. */
-data class Suggestion(
-    val date: LocalDate,
-    val meal: Meal,
-    val recipe: RecipeSummary,
-    val reason: String,
-    /** A rice or bread dish to cook alongside a curry, also from the library. */
-    val side: RecipeSummary? = null,
-    /** Servings the AI chose from the kitchen profile, or null for the household default. */
-    val servings: Int? = null,
-    /** Later meals this cook covers as leftovers (Thursday and Friday lunch). */
-    val covers: List<Pair<LocalDate, Meal>> = emptyList(),
-)
-
-data class WeekIdeas(val items: List<Suggestion>, val summary: String)
-
 /**
  * The AI helpers. Everything goes through Mise's own server function (supabase/functions/mise-ai),
  * which holds the NVIDIA key; the phone only sends the photos or request and the signed-in token.
@@ -65,30 +49,37 @@ object Ai {
         toEditor(r.getJSONObject("recipe"), "Written by Mise AI for: “${prompt.trim()}”. Check it, then save.")
     }
 
-    /** Dish types that make a dinner; drinks, desserts, sauces and breakfasts are left out. */
-    private val mainTypes = setOf("Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew", "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad")
-    private val meatAisles = setOf(Aisle.MEAT, Aisle.PORK)
-    private val vegProteins = listOf("paneer", "dal", "chana", "chickpea", "rajma", "egg", "mushroom", "tofu")
-
-    /** The main proteins of a dish, from its fixed ingredients and default swaps ("mutton", "prawn"). */
-    fun proteins(r: Recipe): String {
-        val ings = r.ingredients + Choices.options(r, Choices.decode("", r)).flatMap { it.ingredients }
-        val found = ings.map { it.name }.filter { n ->
-            val k = Names.keyOf(n)
-            !Regex("\\b(stock|sauce|paste|cube|powder|masala)\\b").containsMatchIn(k) &&
-                (Aisle.guess(n) in meatAisles || vegProteins.any { k.contains(it) })
-        }.map { Names.keyOf(it).split(' ').last() }.distinct()
-        return found.take(2).joinToString(", ").ifEmpty { "vegetables" }
+    /** Full recipes for the library (the planner and Mise AI both need ingredients and swaps). */
+    private suspend fun fullLibrary(ctx: Context, library: List<RecipeSummary>): List<Recipe> {
+        val repo = RecipeRepo.get(ctx)
+        return library.mapNotNull { repo.get(it.id) }
     }
 
-    /** A side to cook with a curry: a plain rice dish or a bread, with no meat of its own. */
-    fun isSide(r: Recipe): Boolean {
-        val t = r.title.lowercase()
-        val breadOrRice = r.dishType == "Rice" || listOf("paratha", "naan", "chapati", "roti", "rice", "pulao", "bread").any { t.contains(it) }
-        return breadOrRice && r.ingredients.none { Aisle.guess(it.name) in meatAisles } && r.slots.isEmpty()
+    /**
+     * Plans the empty slots on the phone from the household pattern: instant, offline, free, and
+     * it never fails. [avoid] holds the last suggestion's dishes, so "Suggest again" differs.
+     */
+    suspend fun planWeek(
+        ctx: Context,
+        library: List<RecipeSummary>,
+        planned: List<PlanEntry>,
+        notes: List<PlanNote>,
+        slots: Map<LocalDate, List<Meal>>,
+        wishes: String,
+        avoid: Set<Long> = emptySet(),
+    ): WeekIdeas {
+        val full = withContext(Dispatchers.IO) { fullLibrary(ctx, library) }
+        return withContext(Dispatchers.Default) {
+            Planner.suggest(
+                Planner.Input(full, library, planned, notes, slots, Prefs.noCook, Prefs.defaultServings, wishes, avoid, System.nanoTime()),
+            )
+        }
     }
 
-    /** Suggests dishes from the library for the given empty slots. */
+    /**
+     * Mise AI's take on the week. The pattern plan goes along as a draft, so the model only has
+     * to improve it (a short answer, so a quick one), and the screen keeps the draft if it fails.
+     */
     suspend fun suggestWeek(
         ctx: Context,
         library: List<RecipeSummary>,
@@ -96,15 +87,15 @@ object Ai {
         notes: List<PlanNote>,
         slots: Map<LocalDate, List<Meal>>,
         wishes: String,
+        draft: WeekIdeas?,
     ): WeekIdeas = withContext(Dispatchers.IO) {
-        val repo = RecipeRepo.get(ctx)
-        val full = library.mapNotNull { repo.get(it.id) }
-        val mains = full.filter { it.dishType in mainTypes || it.dishType.isBlank() }
-        val sides = full.filter { isSide(it) }
+        val full = fullLibrary(ctx, library)
+        val mains = full.filter { Planner.kindOf(it) != null }
+        val sides = full.filter { Planner.isSide(it) }
+        val lastById = library.associate { it.id to it.lastPlanned }
         val lib = JSONArray()
         mains.forEach { r ->
-            val s = library.first { it.id == r.id }
-            lib.put(JSONArray().put(r.id).put(r.title).put(r.dishType).put(r.cuisine).put(s.lastPlanned ?: "never").put(proteins(r)))
+            lib.put(JSONArray().put(r.id).put(r.title).put(r.dishType).put(r.cuisine).put(lastById[r.id] ?: "never").put(Planner.proteins(r)))
         }
         val sideList = JSONArray()
         sides.forEach { sideList.put(JSONArray().put(it.id).put(it.title)) }
@@ -113,10 +104,17 @@ object Ai {
         notes.forEach { already.put("${it.date} ${it.meal.key}: ${it.text}") }
         val want = JSONObject()
         slots.forEach { (d, meals) -> want.put(d.toString(), JSONArray(meals.map { it.key })) }
+        val draftJson = JSONArray()
+        draft?.items?.forEach { d ->
+            draftJson.put(
+                JSONObject().put("date", d.date.toString()).put("meal", d.meal.key).put("recipeId", d.recipe.id).put("sideId", d.side?.id ?: 0)
+                    .put("servings", d.servings ?: 0).put("covers", JSONArray(d.covers.map { (cd, cm) -> JSONObject().put("date", cd.toString()).put("meal", cm.key) })),
+            )
+        }
         val r = call(
             JSONObject().put("task", "week").put("library", lib).put("sides", sideList).put("planned", already).put("slots", want)
                 .put("wishes", wishes.trim()).put("kitchen", Prefs.kitchen).put("servings", Prefs.defaultServings)
-                .put("noCook", JSONArray(Prefs.noCook.sorted())),
+                .put("noCook", JSONArray(Prefs.noCook.sorted())).put("draft", draftJson),
         )
         val byId = library.associateBy { it.id }
         val mainIds = mains.map { it.id }.toSet()
@@ -151,7 +149,7 @@ object Ai {
             covered += cv
             s.copy(covers = cv)
         }
-        WeekIdeas(kept, r.optString("summary"))
+        WeekIdeas(kept, r.optString("summary"), fromAi = true)
     }
 
     /** True when no other suggestion cooks in [slot] (so leftovers can fill it). */

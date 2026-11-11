@@ -239,8 +239,9 @@ fun AiRecipeSheet(mode: AiRecipeMode, onDismiss: () -> Unit, onDraft: (Long) -> 
 }
 
 /**
- * Suggest the week: Mise AI picks dishes from your own recipes for the empty slots, favouring
- * ones you have not had for a while and keeping the week varied. Untick any, then add the rest.
+ * Suggest the week. The plan comes from the phone first, built from the household's own pattern
+ * (instant, offline, never fails). Mise AI can then be asked for its take, with that plan as a
+ * draft; if it is slow or down, the pattern plan stays ready to add. Untick any, then add.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -256,10 +257,11 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
     var meals by remember { mutableStateOf(setOf(Meal.DINNER)) }
     var wishes by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var aiBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var aiNote by remember { mutableStateOf<String?>(null) }
     var ideas by remember { mutableStateOf<WeekIdeas?>(null) }
     var off by remember { mutableStateOf(setOf<Int>()) }
-    var signed by remember { mutableStateOf(Ai.available) }
     var job by remember { mutableStateOf<Job?>(null) }
     val confirm = Haptic.rememberConfirm()
 
@@ -270,35 +272,71 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
         .filterValues { it.isNotEmpty() }
     val slotCount = slots.values.sumOf { it.size }
 
-    fun ask() {
+    /** The pattern plan: on the phone, well under a second. */
+    fun suggest() {
         val lib = library ?: return
-        error = null; busy = true; ideas = null; off = emptySet()
+        val avoid = ideas?.items?.map { it.recipe.id }?.toSet().orEmpty()
+        error = null; aiNote = null; busy = true; off = emptySet()
+        job?.cancel(); aiBusy = false
         job = scope.launch {
             try {
-                ideas = Ai.suggestWeek(ctx, lib, entries, notes, slots.mapValues { it.value.toList() }, wishes)
-                if (ideas?.items.isNullOrEmpty()) error = "No suggestions came back. Try again, or loosen your wishes."
+                val result = Ai.planWeek(ctx, lib, entries, notes, slots.mapValues { it.value.toList() }, wishes, avoid)
+                if (result.items.isEmpty()) error = "None of your recipes fit those meals. Try Dinner, or loosen your wishes."
+                else ideas = result
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                error = Ai.friendly(e)
+                android.util.Log.w("Mise", "Planner failed", e)
+                error = "That did not work. Try again."
             } finally {
                 busy = false
             }
         }
     }
 
-    MiseSheet(title = "Suggest dishes", eyebrow = "Mise AI · " + weekTitle(weekStart), onDismiss = { job?.cancel(); onDismiss() }) {
+    /** Mise AI's take, with the pattern plan as its draft. The pattern plan stays if it fails. */
+    fun askAi() {
+        val lib = library ?: return
+        val draft = ideas
+        aiNote = null; aiBusy = true
+        job = scope.launch {
+            try {
+                val result = kotlinx.coroutines.withTimeout(70_000) {
+                    Ai.suggestWeek(ctx, lib, entries, notes, slots.mapValues { it.value.toList() }, wishes, draft)
+                }
+                if (result.items.isEmpty()) aiNote = "Mise AI had nothing better to add. The plan above is ready."
+                else {
+                    // Any slot Mise AI left out keeps the pattern plan's dish.
+                    val ids = result.items.map { it.recipe.id }.toSet()
+                    val kept = draft?.items.orEmpty().filter { d -> result.items.none { it.date == d.date && it.meal == d.meal } && d.recipe.id !in ids }
+                    ideas = result.copy(items = (result.items + kept).sortedWith(compareBy({ it.date }, { it.meal.ordinal })))
+                    off = emptySet()
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                aiNote = "Mise AI did not answer in time. The plan above is ready to add."
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val code = (e as? app.mise.sync.ServerError)?.code
+                aiNote = if (code == 401 || code == 403) Ai.friendly(e) else "Mise AI could not answer just now. The plan above is ready to add."
+            } finally {
+                aiBusy = false
+            }
+        }
+    }
+
+    MiseSheet(title = "Suggest dishes", eyebrow = "Plan · " + weekTitle(weekStart), onDismiss = { job?.cancel(); onDismiss() }) {
         Column(Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
             val lib = library
             val result = ideas
             when {
-                !signed -> NeedsAccount { signed = true }
                 lib != null && lib.size < 5 -> EmptyState("Add a few more recipes first", "Suggestions come from your own recipes, so there need to be at least five.")
-                busy -> {
-                    Thinking("Looking through your ${lib?.size ?: 0} recipes")
-                    GhostButton("Cancel", { job?.cancel(); busy = false }, Modifier.fillMaxWidth())
-                }
-                result != null && result.items.isNotEmpty() -> {
+                busy && result == null -> Thinking("Planning from your ${lib?.size ?: 0} recipes", "A moment")
+                result != null -> {
+                    Text(
+                        (if (result.fromAi) "Mise AI's take" else "From your household pattern").uppercase(),
+                        style = Mise.type.labelS, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+                    )
                     if (result.summary.isNotBlank()) Text(result.summary, style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
                     Card {
                         result.items.forEachIndexed { i, s ->
@@ -310,12 +348,13 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
                     val n = result.items.size - off.size
                     PrimaryButton(if (n == 0) "Tick the dishes to add" else if (n == 1) "Add 1 dish to the plan" else "Add $n dishes to the plan", {
                         val chosen = result.items.filterIndexed { i, _ -> i !in off }
+                        job?.cancel()
                         plan.scope.launch {
                             val ids = chosen.flatMap { s ->
                                 val r = recipes.get(s.recipe.id) ?: return@flatMap emptyList()
                                 val serv = s.servings ?: plan.defaultServings(r)
                                 // Leftovers rows for the lunches this cook covers, so they show on the plan.
-                                val main = plan.addCook(s.date, s.meal, r.id, serv, Choices.decode("", r), s.covers)
+                                val main = plan.addCook(s.date, s.meal, r.id, serv, s.choices.ifEmpty { Choices.decode("", r) }, s.covers)
                                 val side = s.side?.let { recipes.get(it.id) }?.let { sr -> plan.addCook(s.date, s.meal, sr.id, serv, Choices.decode("", sr), s.covers) }.orEmpty()
                                 main + side
                             }
@@ -325,9 +364,25 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
                         }
                         confirm()
                         onDismiss()
-                    }, Modifier.fillMaxWidth(), enabled = n > 0)
+                    }, Modifier.fillMaxWidth(), enabled = n > 0 && !aiBusy)
                     Spacer(Modifier.height(8.dp))
-                    GhostButton("Suggest again", { ask() }, Modifier.fillMaxWidth())
+                    if (aiBusy) {
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            MiseStamp(28.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Asking Mise AI", style = Mise.type.bodyM, color = c.text)
+                                Text("Up to a minute. You can add the plan above meanwhile.", style = Mise.type.bodyS, color = c.text2)
+                            }
+                            TextAction("Stop", { job?.cancel(); aiBusy = false })
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            GhostButton("Suggest again", { suggest() }, Modifier.weight(1f))
+                            if (Ai.enabled && !result.fromAi) GhostButton("Ask Mise AI", { askAi() }, Modifier.weight(1f))
+                        }
+                    }
+                    aiNote?.let { Text(it, style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 10.dp)) }
                 }
                 else -> {
                     Text("Which meals?", style = Mise.type.bodyM, color = c.text, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
@@ -337,13 +392,13 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    MiseField(wishes, { wishes = it.take(400) }, "Wishes, e.g. fish once, lighter on weekdays", Modifier.fillMaxWidth(), imeAction = ImeAction.Done)
+                    MiseField(wishes, { wishes = it.take(400) }, "Wishes, e.g. fish once, no pork, quick", Modifier.fillMaxWidth(), imeAction = ImeAction.Done)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         if (slotCount == 0) "Every chosen meal from today on is already planned." else "$slotCount empty " + (if (slotCount == 1) "slot" else "slots") + " from today on. Only your own recipes are used.",
                         style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp),
                     )
-                    PrimaryButton(if (slotCount == 0) "Nothing left to fill" else "Suggest dishes", { ask() }, Modifier.fillMaxWidth(), enabled = slotCount > 0 && lib != null)
+                    PrimaryButton(if (slotCount == 0) "Nothing left to fill" else "Suggest dishes", { suggest() }, Modifier.fillMaxWidth(), enabled = slotCount > 0 && lib != null && !busy)
                 }
             }
             error?.let { Text(it, style = Mise.type.bodyS, color = c.danger, modifier = Modifier.padding(start = 4.dp, top = 12.dp)) }
@@ -366,7 +421,8 @@ private fun SuggestionRow(s: Suggestion, checked: Boolean, onToggle: () -> Unit)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(slotLabel(s.date, s.meal).uppercase(), style = Mise.type.labelS, color = c.text2)
-            Text(s.recipe.title + (s.side?.let { " + " + it.title } ?: ""), style = Mise.type.bodyM, color = if (checked) c.text else c.text2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val swap = s.choices.filter { it.isNotBlank() }.joinToString(", ").takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""
+            Text(s.recipe.title + swap + (s.side?.let { " + " + it.title } ?: ""), style = Mise.type.bodyM, color = if (checked) c.text else c.text2, maxLines = 2, overflow = TextOverflow.Ellipsis)
             val extra = listOfNotNull(
                 s.servings?.let { "$it servings" },
                 s.covers.takeIf { it.isNotEmpty() }?.let { cv -> "also " + cv.joinToString(" and ") { (d, m) -> d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.UK) + " " + m.label.lowercase() } },

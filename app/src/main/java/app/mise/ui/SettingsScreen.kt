@@ -287,7 +287,7 @@ private fun AiCheckCard() {
     Card {
         NavRow("How we cook", Prefs.kitchen.lineSequence().firstOrNull()?.take(80)?.let { "$it…" } ?: "Tell Mise AI how your household eats") { editKitchen = true }
         Divider()
-        NavRow(if (busy) "Checking…" else "Check Mise AI", "Photo to recipe, recipe from an idea, suggest dishes") {
+        NavRow(if (busy) "Checking… (up to a minute)" else "Check Mise AI", "Photo to recipe, recipe from an idea, suggest dishes") {
             if (busy) return@NavRow
             if (!app.mise.data.Ai.available) { result = "Sign in first (Household above)."; return@NavRow }
             busy = true; result = null
@@ -299,10 +299,18 @@ private fun AiCheckCard() {
                     val failed = j.optJSONArray("failed")?.let { arr ->
                         (0 until arr.length()).map { arr.getJSONObject(it) }.joinToString("; ") { it.optString("model").substringAfter('/') + ": " + it.optString("why") }
                     }.orEmpty()
+                    // A real planning request: how long Ask Mise AI takes right now.
+                    val planning = j.optJSONArray("planning")?.let { arr -> (0 until arr.length()).map { arr.getJSONObject(it) } }.orEmpty()
+                    val planOk = planning.filter { it.optBoolean("ok") }.sortedBy { it.optLong("ms") }
+                    val planLine = when {
+                        planning.isEmpty() -> ""
+                        planOk.isEmpty() -> " Planning: no model answered within 50 seconds, so Suggest dishes uses your pattern plan."
+                        else -> " Planning: " + planOk.take(3).joinToString(", ") { it.optString("model").substringAfter('/') + " " + (it.optLong("ms") / 1000) + " s" } + "."
+                    }
                     when {
-                        text.isNotEmpty() && vision.isNotEmpty() -> "Ready. Writing and planning: ${text.joinToString(", ")}. Photos: ${vision.joinToString(", ")}."
-                        text.isNotEmpty() -> "Writing and planning work (${text.joinToString(", ")}), but no photo model answered. $failed"
-                        else -> "No model answered just now. $failed"
+                        text.isNotEmpty() && vision.isNotEmpty() -> "Ready. Writing: ${text.joinToString(", ")}. Photos: ${vision.joinToString(", ")}.$planLine"
+                        text.isNotEmpty() -> "Writing works (${text.joinToString(", ")}), but no photo model answered.$planLine $failed"
+                        else -> "No model answered just now.$planLine $failed"
                     }
                 } catch (e: Exception) {
                     app.mise.data.Ai.friendly(e)

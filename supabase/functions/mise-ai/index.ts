@@ -24,6 +24,11 @@ const TEXT_FAMILIES = [
 const VISION_FAMILIES = [
   /qwen[\d.]*-?vl/i, /qwen3\.5/i, /kimi-k2\.[5-9]/i, /nemotron-3-nano-omni/i, /mistral-(large|medium)-3/i, /ministral/i, /gemma-3/i, /llama-4-maverick/i, /(vision|omni|pixtral|-vl)/i,
 ];
+// Planning the week from a short list needs speed more than size: small, fast models first.
+const QUICK_FAMILIES = [
+  /gpt-oss-20b/i, /qwen3[\d.]*-(next-)?\d+b-a3b(?!.*(vl|coder|thinking))/i, /nemotron.*nano(?!.*(vl|omni))/i, /mistral-small/i,
+  /llama-3\.3-70b/i, /openai\/gpt-oss-120b/i, /deepseek-v[\d.]+-flash/i, /glm-[\d.]+-flash/i,
+];
 const SKIP = /(embed|guard|reward|safety|rerank|parse|coder|math|retriev|translate|audio|asr|tts|clip)/i;
 
 const KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
@@ -171,12 +176,14 @@ async function available(): Promise<string[]> {
 }
 
 /** The models to try, in order: preferred ones that exist, then (for photos) any image reader. */
-async function candidates(vision: boolean): Promise<string[]> {
+async function candidates(vision: boolean, task = vision ? "photo" : "text"): Promise<string[]> {
   const forced = Deno.env.get(vision ? "MISE_VISION_MODEL" : "MISE_MODEL");
   const live = (await available()).filter((m) => !SKIP.test(m) && !retired.has(m));
-  const families = vision ? VISION_FAMILIES : TEXT_FAMILIES;
+  const families = vision ? VISION_FAMILIES : task === "week" ? [...QUICK_FAMILIES, ...TEXT_FAMILIES] : TEXT_FAMILIES;
   const ranked: string[] = [];
-  if (good[vision ? 1 : 0]) ranked.push(good[vision ? 1 : 0]!);
+  // The model that last answered this kind of task, if it was quick, goes first.
+  const g = good.get(task);
+  if (g && g.ms < 40_000) ranked.push(g.model);
   for (const f of families) {
     // Newest version first within a family (v4.1 before v4).
     live.filter((m) => f.test(m)).sort((x, y) => y.localeCompare(x, undefined, { numeric: true })).forEach((m) => { if (!ranked.includes(m)) ranked.push(m); });
@@ -185,8 +192,8 @@ async function candidates(vision: boolean): Promise<string[]> {
   return [...new Set(ranked)].filter((m) => !retired.has(m));
 }
 
-/** The last model that answered well, tried first next time (text, vision). */
-const good: [string | null, string | null] = [null, null];
+/** The last model that answered each task well, and how long it took. */
+const good = new Map<string, { model: string; ms: number }>();
 
 const retired = new Set<string>();
 
@@ -240,15 +247,20 @@ async function tryModel(model: string, messages: unknown[], maxTokens: number, s
  * wins and the rest are stopped, so a slow model never holds things up, and a quick answer costs
  * one call, not three. Everything finishes within about 100 seconds, inside the app's wait.
  */
-const STAGGER_MS = 15_000;
-async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000, vision = false) {
+// Answer straight away: long hidden reasoning is what made answers take minutes.
+const DIRECT = "Reasoning: low. Do not think step by step at length; answer directly. /no_think";
+type AskOptions = { task?: string; budgetMs?: number; staggerMs?: number };
+async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL | typeof WEEK_TOOL, maxTokens = 4000, vision = false, opts: AskOptions = {}) {
+  const task = opts.task ?? (vision ? "photo" : "text");
+  const STAGGER_MS = opts.staggerMs ?? 15_000;
   const instruction = `Reply with one JSON object only, no other text, matching this JSON schema:\n${JSON.stringify(tool.input_schema)}`;
   const messages: unknown[] = [
-    { role: "system", content: `${system}\n\n${tool.description}\n${instruction}` },
+    { role: "system", content: `${system}\n\n${tool.description}\n${instruction}\n${DIRECT}` },
     { role: "user", content },
   ];
-  const deadline = Date.now() + 100_000;
-  const queue = await candidates(vision);
+  const started = Date.now();
+  const deadline = started + (opts.budgetMs ?? 100_000);
+  const queue = await candidates(vision, task);
   if (queue.length === 0) throw new Error("No AI model is available right now. Try again later.");
   const tried: string[] = [];
   const reasons: string[] = [];
@@ -259,7 +271,7 @@ async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL 
       let running = 0, done = false;
       let wake: ReturnType<typeof setTimeout> | undefined;
       const finish = () => {
-        if (done || running > 0 || queue.length > 0 && deadline - Date.now() > 12_000) return;
+        if (done || running > 0 || queue.length > 0 && deadline - Date.now() > 8_000) return;
         done = true;
         if (reasons.includes("KEY")) return reject(new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret."));
         if (reasons.length > 0 && reasons.every((r) => r === "LIMIT")) return reject(new Error("NVIDIA's free limit was reached for now. Try again in a minute."));
@@ -269,13 +281,13 @@ async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL 
         clearTimeout(wake);
         if (done) return;
         while (queue.length > 0 && retired.has(queue[0])) queue.shift();
-        if (queue.length === 0 || running >= 3 || deadline - Date.now() < 12_000) return finish();
+        if (queue.length === 0 || running >= 3 || deadline - Date.now() < 8_000) return finish();
         const m = queue.shift()!;
         running++;
         tryModel(m, messages, maxTokens, stop.signal).then((out) => {
           if (done) return;
           done = true;
-          good[vision ? 1 : 0] = m;
+          good.set(task, { model: m, ms: Date.now() - started });
           resolve(out);
         }, (e) => {
           running--;
@@ -371,6 +383,7 @@ Deno.serve(async (req) => {
         if (library.length === 0 || Object.keys(slots).length === 0) return json({ error: "Nothing to plan: add recipes, or choose empty slots." }, 400);
         const servings = Math.min(24, Math.max(0, Math.round(Number(body.servings) || 0)));
         const noCook = arr(body.noCook, 14).map(String).join(", ");
+        const draft = arr(body.draft, 21);
         const text = `Plan the empty slots of this week from the library only.\n` +
           `Days and meals to fill (ISO date: meals): ${JSON.stringify(slots)}\n` +
           `Already planned this week: ${JSON.stringify(arr(body.planned, 60))}\n` +
@@ -383,8 +396,11 @@ Deno.serve(async (req) => {
           `Do not repeat a main dish in the week, and count what is already planned. Prefer dishes not had for a while. ` +
           `For a curry or gravy dish, set sideId to one of the sides listed, otherwise 0. ` +
           `When a cook also feeds later meals (for example the next day's lunch, or two lunches before a no-cook evening), list them in covers and raise servings to match. ` +
-          `Use only ids from the lists and only the given slots.`;
-        return json(await ask(SYSTEM, [{ type: "text", text }], WEEK_TOOL, 2500));
+          `Use only ids from the lists and only the given slots.` +
+          (draft.length ? `\nA draft made on the phone from the household's rules: ${JSON.stringify(draft)}\n` +
+            `Improve it where the profile or the wishes call for something better, otherwise keep it. Reply with the full plan.` : "");
+        // The phone already shows its own plan, so this answer has under a minute, not two.
+        return json(await ask(SYSTEM, [{ type: "text", text }], WEEK_TOOL, 1200, false, { task: "week", budgetMs: 55_000, staggerMs: 8_000 }));
       }
       case "status": {
         // A tiny live test of the top models, so Settings can say what really works.
@@ -400,11 +416,35 @@ Deno.serve(async (req) => {
             }
           }));
           const working = results.filter((r) => r.ok).sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0));
-          if (working[0]) good[vision ? 1 : 0] = working[0].model;
+          // A trivial reply says little about a real one, so the probe never changes the order.
           return { working: working.map((r) => r.model), failed: results.filter((r) => !r.ok) };
         };
-        const [text, vision] = await Promise.all([probe(false), probe(true)]);
-        return json({ text: text.working, vision: vision.working, failed: [...text.failed, ...vision.failed], catalogue: (await available()).length });
+        // A real, small planning request to the quick models: how long suggestions really take.
+        const plan = async () => {
+          const list = (await candidates(false, "week")).slice(0, 4);
+          const lib = [[1, "Butter chicken", "Curry", "Indian", "never", "chicken"], [2, "Mutton curry", "Curry", "Indian", "never", "mutton"],
+            [3, "Spaghetti bolognese", "Pasta", "Italian", "never", "beef"], [4, "Nasi goreng", "Rice", "Indonesian", "never", "prawns"],
+            [5, "Dal", "Dal", "Indian", "never", "vegetables"], [6, "Tandoori salmon bake", "Dry and roast", "Indian", "never", "fish"],
+            [7, "Beijing beef", "Stir fry", "Chinese", "never", "beef"], [8, "Chicken pot pie", "Pizza and savoury bake", "British", "never", "chicken"]];
+          const user = `Plan the empty slots from the library only.\nDays and meals to fill: {"2026-01-05":["dinner"],"2026-01-06":["dinner"],"2026-01-07":["dinner"]}\n` +
+            `Main dishes (id, title, dishType, cuisine, lastHad, proteins): ${JSON.stringify(lib)}\nSides (id, title): [[9,"Jeera rice"]]\n` +
+            `No cooking on: THURSDAY:dinner\nRules: no repeats, rotate proteins, curries get sideId 9. Use only these ids and slots.`;
+          const sys = `${HOUSE}\n\n${WEEK_TOOL.description}\nReply with one JSON object only, no other text, matching this JSON schema:\n${JSON.stringify(WEEK_TOOL.input_schema)}\n${DIRECT}`;
+          const results = await Promise.all(list.map(async (m) => {
+            const t0 = Date.now();
+            try {
+              await tryModel(m, [{ role: "system", content: sys }, { role: "user", content: user }], 1200, AbortSignal.timeout(50_000));
+              return { model: m, ok: true, ms: Date.now() - t0 };
+            } catch (e) {
+              return { model: m, ok: false, ms: Date.now() - t0, why: e instanceof Error ? e.message : String(e) };
+            }
+          }));
+          const fastest = results.filter((r) => r.ok).sort((a, b) => a.ms - b.ms)[0];
+          if (fastest) good.set("week", { model: fastest.model, ms: fastest.ms });
+          return results;
+        };
+        const [text, vision, planning] = await Promise.all([probe(false), probe(true), plan()]);
+        return json({ text: text.working, vision: vision.working, failed: [...text.failed, ...vision.failed], planning, catalogue: (await available()).length });
       }
       default:
         return json({ error: "Unknown task" }, 400);
