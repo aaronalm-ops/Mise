@@ -261,8 +261,11 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
     var error by remember { mutableStateOf<String?>(null) }
     var aiNote by remember { mutableStateOf<String?>(null) }
     var ideas by remember { mutableStateOf<WeekIdeas?>(null) }
+    /** The phone's own plan, kept so you can go back to it after Mise AI's take arrives. */
+    var pattern by remember { mutableStateOf<WeekIdeas?>(null) }
     var off by remember { mutableStateOf(setOf<Int>()) }
     var job by remember { mutableStateOf<Job?>(null) }
+    var autoAsk by remember { mutableIntStateOf(0) }
     val confirm = Haptic.rememberConfirm()
 
     val today = LocalDate.now()
@@ -282,7 +285,11 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
             try {
                 val result = Ai.planWeek(ctx, lib, entries, notes, slots.mapValues { it.value.toList() }, wishes, avoid)
                 if (result.items.isEmpty()) error = "None of your recipes fit those meals. Try Dinner, or loosen your wishes."
-                else ideas = result
+                else {
+                    ideas = result; pattern = result
+                    // Mise AI then takes its turn with this plan as the draft (a few seconds).
+                    if (Ai.enabled) autoAsk++
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -324,6 +331,8 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
             }
         }
     }
+
+    androidx.compose.runtime.LaunchedEffect(autoAsk) { if (autoAsk > 0) askAi() }
 
     MiseSheet(title = "Suggest dishes", eyebrow = "Plan · " + weekTitle(weekStart), onDismiss = { job?.cancel(); onDismiss() }) {
         Column(Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
@@ -371,15 +380,17 @@ fun SuggestWeekSheet(weekStart: LocalDate, onDismiss: () -> Unit, onHousehold: (
                             MiseStamp(28.dp)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
-                                Text("Asking Mise AI", style = Mise.type.bodyM, color = c.text)
-                                Text("Up to a minute. You can add the plan above meanwhile.", style = Mise.type.bodyS, color = c.text2)
+                                Text("Mise AI is reviewing this plan", style = Mise.type.bodyM, color = c.text)
+                                Text("Usually a few seconds. You can add the plan above meanwhile.", style = Mise.type.bodyS, color = c.text2)
                             }
                             TextAction("Stop", { job?.cancel(); aiBusy = false })
                         }
                     } else {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             GhostButton("Suggest again", { suggest() }, Modifier.weight(1f))
-                            if (Ai.enabled && !result.fromAi) GhostButton("Ask Mise AI", { askAi() }, Modifier.weight(1f))
+                            val p = pattern
+                            if (result.fromAi && p != null) GhostButton("Pattern plan", { ideas = p; off = emptySet(); aiNote = null }, Modifier.weight(1f))
+                            else if (Ai.enabled) GhostButton("Ask Mise AI", { askAi() }, Modifier.weight(1f))
                         }
                     }
                     aiNote?.let { Text(it, style = Mise.type.bodyS, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 10.dp)) }

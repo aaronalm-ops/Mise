@@ -1,8 +1,10 @@
-// Mise AI helpers: one Supabase Edge Function between the app and NVIDIA's hosted models
-// (build.nvidia.com, OpenAI-style chat API). The NVIDIA key lives here as a secret, never in
-// the app. Only signed-in accounts whose email is listed in MISE_AI_EMAILS can use it.
+// Mise AI helpers: one Supabase Edge Function between the app and hosted models. Groq answers
+// writing and planning (measured: 1 to 3 seconds); NVIDIA reads photos and is the backup. The
+// keys live here as secrets, never in the app. Only signed-in accounts whose email is listed in
+// MISE_AI_EMAILS can use it.
 //
 // Secrets (Supabase, Edge Functions, Secrets):
+//   GROQ_API_KEY        your key from console.groq.com (starts with gsk_)
 //   NVIDIA_API_KEY      your key from build.nvidia.com (starts with nvapi-)
 //   MISE_AI_EMAILS      comma-separated emails allowed to use AI (your household)
 //   MISE_MODEL          optional: force one text model (otherwise the best available is picked)
@@ -22,7 +24,8 @@ const TEXT_FAMILIES = [
   /kimi-k[\d.]+(?!.*thinking)/i, /mistral-(large|medium)/i, /nemotron-3-super/i, /deepseek-v[\d.]+(?!.*flash)/i,
 ];
 const VISION_FAMILIES = [
-  /qwen[\d.]*-?vl/i, /qwen3\.5/i, /kimi-k2\.[5-9]/i, /nemotron-3-nano-omni/i, /mistral-(large|medium)-3/i, /ministral/i, /gemma-3/i, /llama-4-maverick/i, /(vision|omni|pixtral|-vl)/i,
+  // Measured 11 Nov 2026: Nemotron VL reads a recipe card in about 2 seconds with thinking off.
+  /nemotron-[\d.]+-super-vl/i, /qwen[\d.]*-?vl/i, /qwen3\.5/i, /kimi-k2\.[5-9]/i, /nemotron-3-nano-omni/i, /mistral-(large|medium)-3/i, /ministral/i, /gemma-3/i, /llama-4-maverick/i, /(vision|omni|pixtral|-vl)/i,
 ];
 // Planning the week from a short list needs speed more than size: small, fast models first.
 const QUICK_FAMILIES = [
@@ -32,12 +35,17 @@ const QUICK_FAMILIES = [
 const SKIP = /(embed|guard|reward|safety|rerank|parse|coder|math|retriev|translate|audio|asr|tts|clip)/i;
 
 const KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
+const GROQ_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
+// Groq models, best first; "groq:" marks them in the lists below. Measured 11 Nov 2026 on a real
+// week: gpt-oss-120b about 3 s, gpt-oss-20b 1 to 2 s. No photo models on Groq.
+const GROQ_FAMILIES = [/openai\/gpt-oss-120b$/i, /openai\/gpt-oss-20b$/i, /qwen3/i, /llama-3\.3-70b/i];
+const UA = "mise-ai/1.0";
 const ALLOWED = (Deno.env.get("MISE_AI_EMAILS") ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const ANON = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
 const CUISINES = ["Indian", "Goan", "Pakistani", "Indo-Chinese", "Chinese", "Thai", "Indonesian", "Japanese", "Italian", "American", "British", "Turkish", "Fusion", "International"];
-const DISH_TYPES = ["Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew", "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad", "Breakfast", "Dessert and sweet bake", "Drink", "Sauce and dip"];
+const DISH_TYPES = ["Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew", "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad", "Breakfast", "Dessert and sweet bake", "Drink", "Sauce and dip", "Side"];
 const UNITS = ["g", "kg", "ml", "l", "tsp", "tbsp", "cup", "pc", "clove", "can", "pack", "bunch", "sprig", "pinch", "to taste"];
 
 const HOUSE = `You help a household in the UAE with their recipe and meal-planning app, Mise.
@@ -159,31 +167,42 @@ function extract(text: string): unknown {
   throw new Error("no json");
 }
 
-/** NVIDIA's live model list, refreshed every ten minutes. A failed read is never cached. */
-let catalogue: string[] = [];
-let catalogueAt = 0;
-async function available(): Promise<string[]> {
-  if (catalogue.length > 0 && Date.now() - catalogueAt < 10 * 60_000) return catalogue;
+/** Each provider's live model list, refreshed every ten minutes. A failed read is never cached. */
+const catalogues = new Map<string, { ids: string[]; at: number }>();
+async function liveModels(provider: "nvidia" | "groq"): Promise<string[]> {
+  const key = provider === "groq" ? GROQ_KEY : KEY;
+  if (!key) return [];
+  const c = catalogues.get(provider);
+  if (c && c.ids.length > 0 && Date.now() - c.at < 10 * 60_000) return c.ids;
+  const url = provider === "groq" ? "https://api.groq.com/openai/v1/models" : "https://integrate.api.nvidia.com/v1/models";
   try {
-    const r = await fetch("https://integrate.api.nvidia.com/v1/models", { headers: { Authorization: `Bearer ${KEY}` }, signal: AbortSignal.timeout(8000) });
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${key}`, "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
     const d = await r.json();
     const ids = (d?.data ?? []).map((m: { id: string }) => m.id).filter((x: unknown) => typeof x === "string");
-    if (ids.length > 0) { catalogue = ids; catalogueAt = Date.now(); }
+    if (ids.length > 0) catalogues.set(provider, { ids, at: Date.now() });
+    return ids.length > 0 ? ids : (c?.ids ?? []);
   } catch {
-    // Keep the last good list (or none); the next request tries again.
+    return c?.ids ?? [];
   }
-  return catalogue;
+}
+async function available(): Promise<string[]> {
+  return [...(await liveModels("groq")).map((m) => `groq:${m}`), ...(await liveModels("nvidia"))];
 }
 
 /** The models to try, in order: preferred ones that exist, then (for photos) any image reader. */
 async function candidates(vision: boolean, task = vision ? "photo" : "text"): Promise<string[]> {
   const forced = Deno.env.get(vision ? "MISE_VISION_MODEL" : "MISE_MODEL");
-  const live = (await available()).filter((m) => !SKIP.test(m) && !retired.has(m));
+  const live = (await liveModels("nvidia")).filter((m) => !SKIP.test(m) && !retired.has(m));
   const families = vision ? VISION_FAMILIES : task === "week" ? [...QUICK_FAMILIES, ...TEXT_FAMILIES] : TEXT_FAMILIES;
   const ranked: string[] = [];
+  // Groq first for everything but photos: it answers in seconds; NVIDIA follows as the backup.
+  if (!vision) {
+    const groq = (await liveModels("groq")).filter((m) => !SKIP.test(m) && !/safeguard|guard|whisper|orpheus|allam/i.test(m));
+    for (const f of GROQ_FAMILIES) groq.filter((m) => f.test(m)).forEach((m) => { const id = `groq:${m}`; if (!ranked.includes(id) && !retired.has(id)) ranked.push(id); });
+  }
   // The model that last answered this kind of task, if it was quick, goes first.
   const g = good.get(task);
-  if (g && g.ms < 40_000) ranked.push(g.model);
+  if (g && g.ms < 40_000) ranked.unshift(g.model);
   for (const f of families) {
     // Newest version first within a family (v4.1 before v4).
     live.filter((m) => f.test(m)).sort((x, y) => y.localeCompare(x, undefined, { numeric: true })).forEach((m) => { if (!ranked.includes(m)) ranked.push(m); });
@@ -201,16 +220,21 @@ const retired = new Set<string>();
 async function tryModel(model: string, messages: unknown[], maxTokens: number, signal: AbortSignal): Promise<Record<string, unknown>> {
   const convo = [...messages];
   let plain = false;
+  const groq = model.startsWith("groq:");
+  const name = groq ? model.slice(5) : model;
   for (let attempt = 0; attempt < 2; attempt++) {
     let r: Response;
+    // Answer directly: no long hidden reasoning. Dropped if a model rejects the setting.
+    // On Groq, gpt-oss still reasons a little, so it gets extra room (it writes 400+ words a second).
+    const extra = plain ? {} : groq
+      ? (/gpt-oss/i.test(name) ? { reasoning_effort: "low" } : /qwen3/i.test(name) ? { reasoning_effort: "none" } : {})
+      : { chat_template_kwargs: { thinking: false, enable_thinking: false } };
     try {
-      r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      r = await fetch(groq ? "https://api.groq.com/openai/v1/chat/completions" : "https://integrate.api.nvidia.com/v1/chat/completions", {
         method: "POST",
-        headers: { Authorization: `Bearer ${KEY}`, Accept: "application/json", "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${groq ? GROQ_KEY : KEY}`, Accept: "application/json", "Content-Type": "application/json", "User-Agent": UA },
         body: JSON.stringify({
-          model, messages: convo, max_tokens: maxTokens, temperature: 0.3, top_p: 0.9, stream: false,
-          // Answer directly: no long hidden reasoning. Dropped if a model rejects the setting.
-          ...(plain ? {} : { chat_template_kwargs: { thinking: false, enable_thinking: false } }),
+          model: name, messages: convo, max_tokens: groq ? maxTokens + 1500 : maxTokens, temperature: 0.3, top_p: 0.9, stream: false, ...extra,
         }),
         signal,
       });
@@ -220,9 +244,9 @@ async function tryModel(model: string, messages: unknown[], maxTokens: number, s
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = String(data?.detail ?? data?.error?.message ?? data?.title ?? `error ${r.status}`);
-      if (r.status === 401 || r.status === 403) throw new Error("KEY");
+      if (r.status === 401 || r.status === 403) throw new Error(groq ? "KEY:groq" : "KEY:nvidia");
       if (r.status === 429) throw new Error("LIMIT");
-      if (r.status === 400 && !plain && /kwargs|template|unexpected|extra/i.test(msg)) { plain = true; continue; }
+      if (r.status === 400 && !plain && /kwargs|template|unexpected|extra|reasoning/i.test(msg)) { plain = true; continue; }
       // Listed but not callable on this account, retired, or unable to read images: skip for good.
       if (r.status === 404 || r.status === 410 || /end of life|not found|no longer|not support|does not support image/i.test(msg)) retired.add(model);
       throw new Error(/not found/i.test(msg) ? "not on this account" : msg.slice(0, 60));
@@ -273,7 +297,9 @@ async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL 
       const finish = () => {
         if (done || running > 0 || queue.length > 0 && deadline - Date.now() > 8_000) return;
         done = true;
-        if (reasons.includes("KEY")) return reject(new Error("The NVIDIA key was refused. Check the NVIDIA_API_KEY secret."));
+        if (reasons.length > 0 && reasons.every((r) => r.startsWith("KEY:"))) {
+          return reject(new Error(`The ${reasons.includes("KEY:groq") ? "Groq" : "NVIDIA"} key was refused. Check the ${reasons.includes("KEY:groq") ? "GROQ_API_KEY" : "NVIDIA_API_KEY"} secret.`));
+        }
         if (reasons.length > 0 && reasons.every((r) => r === "LIMIT")) return reject(new Error("NVIDIA's free limit was reached for now. Try again in a minute."));
         reject(new Error(tried.length ? `The AI could not answer (${tried.slice(0, 6).join("; ")}). Try again.` : "No AI model is available right now. Try again later."));
       };
@@ -294,7 +320,11 @@ async function ask(system: string, content: unknown[], tool: typeof RECIPE_TOOL 
           const why = e instanceof Error ? e.message : String(e);
           reasons.push(why);
           tried.push(`${m.split("/").pop()}: ${why}`);
-          if (why === "KEY") { queue.length = 0; return finish(); }
+          // A refused key rules out every model of that provider, not the other provider.
+          if (why.startsWith("KEY:")) {
+            const isGroq = why === "KEY:groq";
+            for (let i = queue.length - 1; i >= 0; i--) if (queue[i].startsWith("groq:") === isGroq) queue.splice(i, 1);
+          }
           next(); // a failure starts the next model straight away
         });
         // No answer yet after a while: start one more alongside.
@@ -323,7 +353,7 @@ function overCap(user: string): boolean {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Use POST" }, 405);
-  if (!KEY) return json({ error: "AI is not set up yet: the NVIDIA_API_KEY secret is missing." }, 500);
+  if (!KEY && !GROQ_KEY) return json({ error: "AI is not set up yet: add the GROQ_API_KEY secret (and NVIDIA_API_KEY for photos)." }, 500);
 
   // Who is asking: the signed-in Mise account.
   const auth = req.headers.get("Authorization") ?? "";
@@ -384,8 +414,12 @@ Deno.serve(async (req) => {
         const servings = Math.min(24, Math.max(0, Math.round(Number(body.servings) || 0)));
         const noCook = arr(body.noCook, 14).map(String).join(", ");
         const draft = arr(body.draft, 21);
+        const named = Object.fromEntries(Object.entries(slots as Record<string, unknown>).map(([d, m]) => {
+          const t = Date.parse(d + "T12:00:00Z");
+          return [Number.isNaN(t) ? d : `${d} (${new Date(t).toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" })})`, m];
+        }));
         const text = `Plan the empty slots of this week from the library only.\n` +
-          `Days and meals to fill (ISO date: meals): ${JSON.stringify(slots)}\n` +
+          `Days and meals to fill (ISO date and weekday: meals): ${JSON.stringify(named)}. Use the ISO date alone in your answer.\n` +
           `Already planned this week: ${JSON.stringify(arr(body.planned, 60))}\n` +
           `Main dishes (id, title, dishType, cuisine, lastHad, proteins): ${JSON.stringify(library)}\n` +
           `Sides, rice and breads (id, title): ${JSON.stringify(sides)}\n` +
@@ -409,7 +443,7 @@ Deno.serve(async (req) => {
           const results = await Promise.all(list.map(async (m) => {
             const t0 = Date.now();
             try {
-              await tryModel(m, [{ role: "user", content: 'Reply with {"ok": true}' }], 200, AbortSignal.timeout(20_000));
+              await tryModel(m, [{ role: "user", content: 'Reply with {"ok": true}' }], 200, AbortSignal.timeout(15_000));
               return { model: m, ok: true, ms: Date.now() - t0 };
             } catch (e) {
               return { model: m, ok: false, why: e instanceof Error ? e.message : String(e) };
@@ -421,7 +455,7 @@ Deno.serve(async (req) => {
         };
         // A real, small planning request to the quick models: how long suggestions really take.
         const plan = async () => {
-          const list = (await candidates(false, "week")).slice(0, 4);
+          const list = (await candidates(false, "week")).slice(0, 3);
           const lib = [[1, "Butter chicken", "Curry", "Indian", "never", "chicken"], [2, "Mutton curry", "Curry", "Indian", "never", "mutton"],
             [3, "Spaghetti bolognese", "Pasta", "Italian", "never", "beef"], [4, "Nasi goreng", "Rice", "Indonesian", "never", "prawns"],
             [5, "Dal", "Dal", "Indian", "never", "vegetables"], [6, "Tandoori salmon bake", "Dry and roast", "Indian", "never", "fish"],
@@ -433,14 +467,12 @@ Deno.serve(async (req) => {
           const results = await Promise.all(list.map(async (m) => {
             const t0 = Date.now();
             try {
-              await tryModel(m, [{ role: "system", content: sys }, { role: "user", content: user }], 1200, AbortSignal.timeout(50_000));
+              await tryModel(m, [{ role: "system", content: sys }, { role: "user", content: user }], 1200, AbortSignal.timeout(25_000));
               return { model: m, ok: true, ms: Date.now() - t0 };
             } catch (e) {
               return { model: m, ok: false, ms: Date.now() - t0, why: e instanceof Error ? e.message : String(e) };
             }
           }));
-          const fastest = results.filter((r) => r.ok).sort((a, b) => a.ms - b.ms)[0];
-          if (fastest) good.set("week", { model: fastest.model, ms: fastest.ms });
           return results;
         };
         const [text, vision, planning] = await Promise.all([probe(false), probe(true), plan()]);

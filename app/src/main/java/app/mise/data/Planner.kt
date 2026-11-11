@@ -46,7 +46,8 @@ object Planner {
         PORK("pork"), TURKEY("turkey"), VEG("vegetarian"),
     }
 
-    private val excludedTypes = setOf("Drink", "Dessert and sweet bake", "Sauce and dip")
+    /** Never a meal on their own; "Side" covers breads, plain rice, raitas and vegetable sides. */
+    private val excludedTypes = setOf("Drink", "Dessert and sweet bake", "Sauce and dip", "Side")
     private val notProtein = Regex("\\b(stock|sauce|paste|cube|powder|masala|seasoning|broth|bouillon|fat|oil|gravy|dressing)\\b")
     /** Checked in order: "minced beef" is beef before "mince" is mutton. */
     private val proteinWords: List<Pair<Regex, Protein>> = listOf(
@@ -58,7 +59,8 @@ object Planner {
         Regex("\\bturkey\\b") to Protein.TURKEY,
         Regex("\\bchicken\\b") to Protein.CHICKEN,
     )
-    private val breadWords = Regex("\\b(paratha|parathas|naan|chapati|chapatis|roti|rotis|kulcha|puri|appam|sannas|bread|pav|phulka)\\b")
+    private val breadWords = Regex("\\b(paratha|parathas|naan|chapati|chapatis|roti|rotis|kulcha|puri|appam|sannas|pav|phulka|thepla|poi)\\b")
+    private val plainRiceWords = Regex("\\b(jeera rice|pulao|pilaf|steamed|plain|ghee rice|coconut rice|lemon rice|tomato rice|brown rice|basmati|saffron rice|boiled rice|white rice)\\b")
     private val mainRiceWords = Regex("\\b(fried|biryani|biriyani|nasi|goreng|risotto|paella|kabsa|machboos|mandi)\\b")
 
     /** Proteins of a dish in ingredient order, using the chosen swaps; vegetarian when none. */
@@ -79,11 +81,11 @@ object Planner {
 
     /** A side to cook with a curry: plain rice or a bread, with no meat of its own. */
     fun isSide(r: Recipe): Boolean {
-        if (r.dishType in setOf("Sandwich and burger", "Breakfast", "Drink", "Dessert and sweet bake", "Sauce and dip")) return false
-        if (r.slots.isNotEmpty() || proteinsOf(r).any { it != Protein.VEG }) return false
+        if (r.dishType != "Side" && r.dishType != "Rice") return false
+        if (r.slots.any { s -> s.options.size > 1 && s.name.contains("protein", true) } || proteinsOf(r).any { it != Protein.VEG }) return false
         val t = r.title.lowercase()
-        if (breadWords.containsMatchIn(t)) return true
-        return (r.dishType == "Rice" || t.contains("rice")) && !mainRiceWords.containsMatchIn(t)
+        if (r.dishType == "Side" && breadWords.containsMatchIn(t)) return true
+        return plainRiceWords.containsMatchIn(t) && !mainRiceWords.containsMatchIn(t)
     }
 
     fun isBread(r: Recipe) = isSide(r) && breadWords.containsMatchIn(r.title.lowercase())

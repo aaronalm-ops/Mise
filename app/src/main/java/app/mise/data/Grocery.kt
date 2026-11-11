@@ -84,6 +84,15 @@ enum class Aisle(val key: String, val label: String) {
             put(FROZEN, "paratha", "frozen paratha")
             put(DRINKS, "juice", "orange juice", "cranberry juice", "pineapple juice", "grape juice", "sparkling water", "sparkling juice", "soda", "soda water", "sprite", "pepsi", "ginger ale", "ginger beer", "coconut water")
             put(FROZEN, "frozen", "frozen vegetable", "frozen pea", "ice cream", "vanilla ice cream", "puff pastry")
+            // Ingredients from the Mise recipe library.
+            put(PRODUCE, "beetroot", "bottle gourd", "lauki", "celery", "courgette", "pak choi", "pineapple", "sprouted moong", "sweet potato", "raw mango", "drumstick", "baby corn", "raw banana", "thai aubergine")
+            put(HERBS, "kaffir lime leaf", "fenugreek leaf", "fresh fenugreek leaf")
+            put(MEAT, "hammour", "mackerel", "mussel", "dory", "cream dory", "pomfret", "shark", "smoked fish", "beef sirloin", "beef shank", "chuck")
+            put(DRY, "fettuccine", "fusilli", "linguine", "orzo", "pappardelle", "lasagne sheet", "cannelloni tube", "vermicelli", "raisin", "candlenut", "urad dal", "moong dal", "toor dal", "black-eyed bean", "black eyed bean", "black chickpea", "short grain rice", "arborio rice")
+            put(PANTRY, "bamboo shoot", "olive", "black olive", "caper", "creamed sweetcorn", "sweetcorn", "gochujang", "curry roux", "japanese curry roux", "mirin", "sambal", "sambal oelek", "anchovy", "anchovy fillet", "sun dried tomato", "fried onion", "fried shallot", "passata", "tomato passata", "chopped tomato")
+            put(SPICES, "amchur", "baharat", "shawarma spice", "kokum", "dried lime", "dried mint", "sichuan pepper", "nihari masala", "goda masala")
+            put(DAIRY, "feta", "ricotta")
+            put(BAKERY, "baguette", "breadcrumb", "panko breadcrumb")
             put(PRODUCE, "onion", "tomato", "cherry tomato", "potato", "garlic", "ginger", "green chilli", "chilli", "chili", "red chilli", "carrot", "capsicum", "bell pepper", "lemon", "lime", "cucumber", "spinach", "paalak", "cabbage", "cauliflower", "broccoli", "brinjal", "aubergine", "eggplant", "okra", "bhindi", "french bean", "green bean", "pea", "green pea", "mushroom", "lettuce", "salad leaf", "apple", "banana", "mango", "coconut", "fresh coconut", "avocado", "zucchini", "pumpkin", "sprout", "corn", "bok choy", "shallot", "passion fruit", "pomegranate", "strawberry", "blueberry", "vegetable", "mixed vegetable", "coleslaw")
         }
 

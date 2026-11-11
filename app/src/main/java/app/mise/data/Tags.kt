@@ -9,7 +9,7 @@ object Tags {
     val dishTypes = listOf(
         "Curry", "Dal", "Dry and roast", "Rice", "Noodles", "Pasta", "Stir fry", "Soup and stew",
         "Finger food", "Sandwich and burger", "Pizza and savoury bake", "Salad", "Breakfast",
-        "Dessert and sweet bake", "Drink", "Sauce and dip",
+        "Dessert and sweet bake", "Drink", "Sauce and dip", "Side",
     )
 
     /** Dish types cooked by exact measure, where every amount scales in a straight line. */
